@@ -1,0 +1,11 @@
+RewriteEngine On
+
+# Handle clean API routes /api/auth/login -> router.php?path=auth/login
+RewriteRule ^api/(.*)$ router.php?path=$1 [L,QSA]
+
+# Serve uploads
+<IfModule mod_headers.c>
+    <FilesMatch "\.(jpg|jpeg|png|gif)$">
+        Header set Cache-Control "max-age=31536000, public"
+    </FilesMatch>
+</IfModule>
