@@ -1,0 +1,17 @@
+
+> online-learning@0.0.0 dev
+> vite --host 127.0.0.1 --port 5173
+
+[31mfailed to load config from C:\xampp\htdocs\Online-Learning-Platform\frontend\vite.config.js[39m
+[31merror when starting dev server:
+Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:421:11)
+    at Object.spawn (node:child_process:796:9)
+    at ensureServiceIsRunning (C:\xampp\htdocs\Online-Learning-Platform\frontend\node_modules\esbuild\lib\main.js:1982:29)
+    at build (C:\xampp\htdocs\Online-Learning-Platform\frontend\node_modules\esbuild\lib\main.js:1880:26)
+    at bundleConfigFile (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/chunks/dep-glQox-ep.js:54476:24)
+    at async bundleAndLoadConfigFile (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/chunks/dep-glQox-ep.js:54460:19)
+    at async loadConfigFromFile (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/chunks/dep-glQox-ep.js:54423:44)
+    at async resolveConfig (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/chunks/dep-glQox-ep.js:53931:24)
+    at async _createServer (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/chunks/dep-glQox-ep.js:43843:18)
+    at async CAC.<anonymous> (file:///C:/xampp/htdocs/Online-Learning-Platform/frontend/node_modules/vite/dist/node/cli.js:750:20)[39m
