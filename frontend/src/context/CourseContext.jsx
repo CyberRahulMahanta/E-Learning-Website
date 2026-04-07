@@ -318,6 +318,21 @@ export const CourseProvider = ({ children }) => {
     }
   }, [api]);
 
+  const fetchCourseFlowStatus = useCallback(async (courseId) => {
+    setError(null);
+    try {
+      const token = localStorage.getItem("token");
+      const response = await api.get(`/courses/${courseId}/flow-status`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      return { success: true, data: response?.data };
+    } catch (err) {
+      const message = err?.response?.data?.message || err?.message || "Failed to fetch course flow status.";
+      setError(message);
+      return { success: false, error: message };
+    }
+  }, [api]);
+
   const updateLessonProgress = useCallback(async (lessonId, payload) => {
     setError(null);
     try {
@@ -472,6 +487,7 @@ export const CourseProvider = ({ children }) => {
     submitReview,
     fetchCourseReviews,
     fetchCourseContent,
+    fetchCourseFlowStatus,
     updateLessonProgress,
     fetchCourseProgress,
     fetchCourseCertificate,
@@ -505,6 +521,7 @@ export const CourseProvider = ({ children }) => {
     submitReview,
     fetchCourseReviews,
     fetchCourseContent,
+    fetchCourseFlowStatus,
     updateLessonProgress,
     fetchCourseProgress,
     fetchCourseCertificate,

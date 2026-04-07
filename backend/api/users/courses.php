@@ -20,7 +20,7 @@ $stmt->execute([(int) $authUser['id']]);
 $rows = $stmt->fetchAll();
 
 $progressMap = [];
-$completedCourseIds = [];
+$completionMap = [];
 if (table_exists($pdo, 'user_course_progress')) {
     $progressStmt = $pdo->prepare(
         'SELECT course_id, progress_percent, completed_lessons, total_lessons, status, last_activity_at, completed_at
@@ -37,21 +37,26 @@ if (table_exists($pdo, 'user_course_progress')) {
             'lastActivityAt' => $progressRow['last_activity_at'],
             'completedAt' => $progressRow['completed_at']
         ];
-        if ((string) $progressRow['status'] === 'completed') {
-            $completedCourseIds[] = (int) $progressRow['course_id'];
-        }
     }
+}
+
+foreach ($rows as $row) {
+    $courseId = (int) $row['course_id'];
+    $completionMap[$courseId] = evaluate_course_completion_requirements($pdo, (int) $authUser['id'], $courseId);
 }
 
 $certificateMap = [];
 if (table_exists($pdo, 'certificates')) {
-    foreach (array_unique($completedCourseIds) as $completedCourseId) {
-        issue_course_certificate(
-            $pdo,
-            (int) $authUser['id'],
-            (int) $completedCourseId,
-            ['issuedFrom' => 'users.courses']
-        );
+    foreach ($rows as $row) {
+        $courseId = (int) $row['course_id'];
+        if (!empty($completionMap[$courseId]['eligible'])) {
+            issue_course_certificate(
+                $pdo,
+                (int) $authUser['id'],
+                $courseId,
+                ['issuedFrom' => 'users.courses']
+            );
+        }
     }
 
     $certStmt = $pdo->prepare(
@@ -65,7 +70,7 @@ if (table_exists($pdo, 'certificates')) {
     }
 }
 
-$courses = array_map(function ($row) use ($progressMap, $certificateMap) {
+$courses = array_map(function ($row) use ($progressMap, $certificateMap, $completionMap) {
     $course = normalize_course($row);
 
     return [
@@ -78,6 +83,7 @@ $courses = array_map(function ($row) use ($progressMap, $certificateMap) {
         'enrolledAt' => $row['enrolled_at'],
         'createdAt' => $row['enrolled_at'],
         'progress' => $progressMap[(int) $row['course_id']] ?? null,
+        'completion' => $completionMap[(int) $row['course_id']] ?? null,
         'certificate' => $certificateMap[(int) $row['course_id']] ?? null,
         'course' => $course
     ];

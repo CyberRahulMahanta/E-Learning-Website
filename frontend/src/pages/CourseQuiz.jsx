@@ -9,13 +9,14 @@ const CourseQuiz = () => {
   const { courseId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { fetchCourseById, getCourseById, fetchCourseQuizzes, attemptQuiz } = useCourses();
+  const { fetchCourseById, getCourseById, fetchCourseQuizzes, fetchCourseFlowStatus, attemptQuiz } = useCourses();
 
   const [quizzes, setQuizzes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmittingQuizId, setIsSubmittingQuizId] = useState(null);
   const [answersByQuiz, setAnswersByQuiz] = useState({});
   const [attemptResultByQuiz, setAttemptResultByQuiz] = useState({});
+  const [flowSteps, setFlowSteps] = useState([]);
   const [pageError, setPageError] = useState("");
 
   const course = getCourseById(courseId);
@@ -29,13 +30,19 @@ const CourseQuiz = () => {
       setIsLoading(true);
       setPageError("");
       await fetchCourseById(courseId);
-      const result = await fetchCourseQuizzes(courseId);
+      const [result, flowResult] = await Promise.all([
+        fetchCourseQuizzes(courseId),
+        fetchCourseFlowStatus(courseId)
+      ]);
       if (!active) return;
 
       if (!result.success) {
         setPageError(result.error || "Failed to load quizzes.");
       }
       setQuizzes(result.quizzes || []);
+      if (flowResult.success) {
+        setFlowSteps(flowResult?.data?.flow || []);
+      }
       setIsLoading(false);
     };
 
@@ -43,7 +50,18 @@ const CourseQuiz = () => {
     return () => {
       active = false;
     };
-  }, [courseId, fetchCourseById, fetchCourseQuizzes]);
+  }, [courseId, fetchCourseById, fetchCourseQuizzes, fetchCourseFlowStatus]);
+
+  const flowMap = useMemo(() => {
+    return (flowSteps || []).reduce((map, step) => {
+      map[step.key] = step;
+      return map;
+    }, {});
+  }, [flowSteps]);
+
+  const finalPrerequisitesPassed = Boolean(flowMap.lessons?.passed) &&
+    Boolean(flowMap.moduleQuizzes?.passed) &&
+    Boolean(flowMap.assignments?.passed);
 
   const setAnswer = (quizId, question, value) => {
     const questionId = String(question.id);
@@ -143,11 +161,20 @@ const CourseQuiz = () => {
                 const quizId = quiz.id || quiz._id;
                 const runtimeResult = attemptResultByQuiz[quizId];
                 const latestAttempt = runtimeResult || quiz.latestAttempt;
+                const isFinalAssessment = !!quiz.isFinalAssessment;
+                const submitDisabled = isSubmittingQuizId === quizId || (isFinalAssessment && !finalPrerequisitesPassed);
                 return (
                   <section key={quizId} className="p-5 border rounded-xl border-fuchsia-700 bg-stone-950">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <h2 className="text-2xl font-semibold">{quiz.title}</h2>
+                        <h2 className="text-2xl font-semibold">
+                          {quiz.title}
+                          {isFinalAssessment && (
+                            <span className="px-2 py-1 ml-2 text-xs text-white bg-green-700 rounded">
+                              Final Assessment
+                            </span>
+                          )}
+                        </h2>
                         <p className="mt-1 text-gray-300">{quiz.description || "No description available."}</p>
                       </div>
                       <div className="text-sm text-gray-300">
@@ -225,13 +252,20 @@ const CourseQuiz = () => {
                       )}
 
                       {canSubmit ? (
-                        <button
-                          className="px-5 py-2 text-sm font-medium text-white rounded-lg bg-fuchsia-700 hover:bg-fuchsia-600 disabled:opacity-60"
-                          disabled={isSubmittingQuizId === quizId}
-                          onClick={() => handleSubmitQuiz(quiz)}
-                        >
-                          {isSubmittingQuizId === quizId ? "Submitting..." : "Submit Quiz"}
-                        </button>
+                        <div className="flex flex-col items-end gap-2">
+                          <button
+                            className="px-5 py-2 text-sm font-medium text-white rounded-lg bg-fuchsia-700 hover:bg-fuchsia-600 disabled:opacity-60"
+                            disabled={submitDisabled}
+                            onClick={() => handleSubmitQuiz(quiz)}
+                          >
+                            {isSubmittingQuizId === quizId ? "Submitting..." : "Submit Quiz"}
+                          </button>
+                          {isFinalAssessment && !finalPrerequisitesPassed && (
+                            <p className="text-xs text-yellow-300">
+                              Complete lessons, module quizzes, and assignments first.
+                            </p>
+                          )}
+                        </div>
                       ) : (
                         <p className="text-sm text-gray-400">Quiz attempts are enabled for student accounts.</p>
                       )}

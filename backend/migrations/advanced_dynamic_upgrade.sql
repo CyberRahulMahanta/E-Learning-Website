@@ -250,6 +250,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   description TEXT NULL,
   pass_percentage DECIMAL(5,2) NOT NULL DEFAULT 60.00,
   time_limit_minutes INT NULL,
+  is_final_assessment TINYINT(1) NOT NULL DEFAULT 0,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -258,6 +259,8 @@ CREATE TABLE IF NOT EXISTS quizzes (
   CONSTRAINT fk_quiz_module FOREIGN KEY (module_id) REFERENCES course_modules(id) ON DELETE SET NULL,
   CONSTRAINT fk_quiz_lesson FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL
 );
+
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS is_final_assessment TINYINT(1) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS quiz_questions (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -540,6 +543,67 @@ SELECT q.id,
 FROM quizzes q
 JOIN courses c ON c.id = q.course_id
 WHERE q.title = CONCAT(c.name, ' - Starter Quiz')
+  AND NOT EXISTS (
+    SELECT 1 FROM quiz_questions qq WHERE qq.quiz_id = q.id
+  );
+
+-- Ensure each module has at least one module quiz (for step-wise learning flow)
+INSERT INTO quizzes (course_id, module_id, title, description, pass_percentage, time_limit_minutes, is_active, is_final_assessment)
+SELECT cm.course_id,
+       cm.id,
+       CONCAT(cm.title, ' - Module Quiz'),
+       'Auto-generated module-level quiz.',
+       60,
+       15,
+       1,
+       0
+FROM course_modules cm
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM quizzes q
+  WHERE q.module_id = cm.id
+    AND q.is_active = 1
+    AND q.is_final_assessment = 0
+);
+
+INSERT INTO quiz_questions (quiz_id, question_text, question_type, options, correct_answer, marks, sort_order)
+SELECT q.id,
+       'Module checkpoint question: choose option A.',
+       'single',
+       JSON_ARRAY('A', 'B', 'C', 'D'),
+       JSON_QUOTE('A'),
+       1,
+       1
+FROM quizzes q
+WHERE q.title LIKE '% - Module Quiz'
+  AND NOT EXISTS (
+    SELECT 1 FROM quiz_questions qq WHERE qq.quiz_id = q.id
+  );
+
+-- Ensure each course has one final assessment
+INSERT INTO quizzes (course_id, title, description, pass_percentage, time_limit_minutes, is_active, is_final_assessment)
+SELECT c.id,
+       CONCAT(c.name, ' - Final Assessment'),
+       'Course completion final assessment.',
+       70,
+       30,
+       1,
+       1
+FROM courses c
+WHERE NOT EXISTS (
+  SELECT 1 FROM quizzes q WHERE q.course_id = c.id AND q.is_final_assessment = 1
+);
+
+INSERT INTO quiz_questions (quiz_id, question_text, question_type, options, correct_answer, marks, sort_order)
+SELECT q.id,
+       'Final assessment question: choose option A.',
+       'single',
+       JSON_ARRAY('A', 'B', 'C', 'D'),
+       JSON_QUOTE('A'),
+       2,
+       1
+FROM quizzes q
+WHERE q.is_final_assessment = 1
   AND NOT EXISTS (
     SELECT 1 FROM quiz_questions qq WHERE qq.quiz_id = q.id
   );

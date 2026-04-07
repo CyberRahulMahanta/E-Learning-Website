@@ -47,6 +47,7 @@ const SyllabusPage = () => {
     fetchCourseById,
     getCourseById,
     fetchCourseContent,
+    fetchCourseFlowStatus,
     fetchCourseProgress,
     updateLessonProgress,
     fetchCourseCertificate,
@@ -58,6 +59,7 @@ const SyllabusPage = () => {
   const [progressMap, setProgressMap] = useState({});
   const [courseProgress, setCourseProgress] = useState(null);
   const [certificate, setCertificate] = useState(null);
+  const [flowSteps, setFlowSteps] = useState([]);
   const [activeLessonId, setActiveLessonId] = useState(null);
   const [pageError, setPageError] = useState("");
   const [syncingLessonId, setSyncingLessonId] = useState(null);
@@ -133,11 +135,13 @@ const SyllabusPage = () => {
       let nextProgressMap = {};
       let nextCourseProgress = null;
       let nextCertificate = null;
+      let nextFlowSteps = [];
 
       if (isAuthenticated && contentRes?.fullAccess) {
-        const [progressRes, certRes] = await Promise.all([
+        const [progressRes, certRes, flowRes] = await Promise.all([
           fetchCourseProgress(courseId),
-          fetchCourseCertificate(courseId)
+          fetchCourseCertificate(courseId),
+          fetchCourseFlowStatus(courseId)
         ]);
         if (!active) return;
 
@@ -154,11 +158,19 @@ const SyllabusPage = () => {
         if (certRes.success && certRes?.data?.certificate) {
           nextCertificate = certRes.data.certificate;
         }
+
+        if (flowRes.success) {
+          nextFlowSteps = flowRes?.data?.flow || [];
+          if (flowRes?.data?.certificate) {
+            nextCertificate = flowRes.data.certificate;
+          }
+        }
       }
 
       setProgressMap(nextProgressMap);
       setCourseProgress(nextCourseProgress);
       setCertificate(nextCertificate || null);
+      setFlowSteps(nextFlowSteps);
 
       const nextLessons = nextModules.flatMap((module) => module.lessons || []);
       setActiveLessonId(pickInitialLessonId(nextLessons, nextProgressMap));
@@ -176,6 +188,7 @@ const SyllabusPage = () => {
     courseId,
     fetchCourseById,
     fetchCourseContent,
+    fetchCourseFlowStatus,
     fetchCourseProgress,
     fetchCourseCertificate,
     isAuthenticated,
@@ -249,13 +262,30 @@ const SyllabusPage = () => {
       if (result?.data?.certificate) {
         setCertificate(result.data.certificate);
       }
+      if (result?.data?.completion && flowSteps.length > 0) {
+        setFlowSteps((prev) => prev.map((step) => {
+          if (step.key === "lessons") {
+            const lessons = result.data.completion.steps?.lessons || {};
+            return {
+              ...step,
+              passed: !!lessons.passed,
+              required: Number(lessons.required || 0),
+              completed: Number(lessons.completed || 0)
+            };
+          }
+          if (step.key === "certificate" && result?.data?.certificate) {
+            return { ...step, passed: true, completed: 1 };
+          }
+          return step;
+        }));
+      }
       setPageError("");
     } else {
       setPageError(result.error || "Unable to sync progress.");
     }
 
     setSyncingLessonId(null);
-  }, [fullAccess, isAuthenticated, progressMap, updateLessonProgress]);
+  }, [flowSteps.length, fullAccess, isAuthenticated, progressMap, updateLessonProgress]);
 
   const handleLessonChange = async (nextLessonId) => {
     if (!nextLessonId || String(nextLessonId) === String(activeLessonId)) return;
@@ -310,7 +340,7 @@ const SyllabusPage = () => {
   const activeVideoUrl = activeLesson?.videoUrl || "";
   const youtubeEmbedUrl = getYouTubeEmbedUrl(activeVideoUrl);
   const playableVideoUrl = getPlayableVideoUrl(activeVideoUrl);
-  const showCertificateCard = computedProgress.progressPercent >= 100;
+  const showCertificateCard = computedProgress.progressPercent >= 100 || Boolean(certificate);
 
   return (
     <div className="min-h-screen px-6 pb-16 text-white bg-black">
@@ -355,6 +385,51 @@ const SyllabusPage = () => {
             />
           </div>
         </div>
+
+        {flowSteps.length > 0 && (
+          <section className="p-5 mt-6 border rounded-2xl border-fuchsia-700 bg-stone-950">
+            <h2 className="text-xl font-semibold">Completion Flow</h2>
+            <p className="mt-1 text-sm text-gray-300">
+              Browse Courses, Enroll, Lessons, Module Quizzes, Assignments, Progress, Final Assessment, Certificate
+            </p>
+            <div className="grid gap-3 mt-4 md:grid-cols-2">
+              {flowSteps.map((step) => (
+                <div
+                  key={step.key}
+                  className={`p-3 rounded-lg border ${step.passed ? "border-green-600 bg-green-950/20" : "border-stone-700 bg-black"}`}
+                >
+                  <p className="text-sm font-medium">{step.label}</p>
+                  <p className="mt-1 text-xs text-gray-300">
+                    {Number(step.completed || 0)} / {Number(step.required || 0)} completed
+                  </p>
+                  <p className={`mt-1 text-xs ${step.passed ? "text-green-300" : "text-yellow-300"}`}>
+                    {step.passed ? "Completed" : "Pending"}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-3 mt-4">
+              <button
+                className="px-4 py-2 text-sm text-white rounded-lg bg-fuchsia-700 hover:bg-fuchsia-600"
+                onClick={() => navigate(`/courses/${courseId}/quizzes`)}
+              >
+                Go to Quizzes
+              </button>
+              <button
+                className="px-4 py-2 text-sm text-white rounded-lg bg-stone-700 hover:bg-stone-600"
+                onClick={() => navigate(`/courses/${courseId}/assignments`)}
+              >
+                Go to Assignments
+              </button>
+              <button
+                className="px-4 py-2 text-sm text-white rounded-lg bg-green-700 hover:bg-green-600"
+                onClick={() => navigate(`/courses/${courseId}/certificate`)}
+              >
+                Check Certificate
+              </button>
+            </div>
+          </section>
+        )}
 
         {pageError && (
           <p className="p-3 mt-4 text-red-300 border rounded-lg bg-red-950/20 border-red-800">{pageError}</p>

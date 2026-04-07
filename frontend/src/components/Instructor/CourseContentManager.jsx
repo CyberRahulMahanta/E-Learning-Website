@@ -13,6 +13,68 @@ const defaultLessonDraft = {
   isPreview: false
 };
 
+const lessonTypeConfig = {
+  video: {
+    showVideoUrl: true,
+    videoLabel: "Video URL",
+    videoPlaceholder: "YouTube or MP4 URL",
+    showDuration: true,
+    durationLabel: "Duration in minutes",
+    showContent: true,
+    contentLabel: "Lesson notes (optional)",
+    contentPlaceholder: "Add notes, summary, or timestamps...",
+    requireVideoUrl: true,
+    requireContent: false,
+    allowPreview: true
+  },
+  article: {
+    showVideoUrl: false,
+    showDuration: true,
+    durationLabel: "Estimated read time (minutes)",
+    showContent: true,
+    contentLabel: "Article content",
+    contentPlaceholder: "Write article content here...",
+    requireVideoUrl: false,
+    requireContent: true,
+    allowPreview: true
+  },
+  live: {
+    showVideoUrl: true,
+    videoLabel: "Live session link",
+    videoPlaceholder: "Google Meet / Zoom / Teams link",
+    showDuration: true,
+    durationLabel: "Session duration (minutes)",
+    showContent: true,
+    contentLabel: "Session agenda/details",
+    contentPlaceholder: "Add agenda, prerequisites, and instructions...",
+    requireVideoUrl: true,
+    requireContent: true,
+    allowPreview: false
+  },
+  quiz: {
+    showVideoUrl: false,
+    showDuration: false,
+    showContent: true,
+    contentLabel: "Quiz overview/instructions",
+    contentPlaceholder: "Explain what students should prepare before attempting...",
+    requireVideoUrl: false,
+    requireContent: true,
+    allowPreview: false
+  },
+  assignment: {
+    showVideoUrl: false,
+    showDuration: false,
+    showContent: true,
+    contentLabel: "Assignment brief/instructions",
+    contentPlaceholder: "Describe task, deliverables, rubric, and deadline details...",
+    requireVideoUrl: false,
+    requireContent: true,
+    allowPreview: false
+  }
+};
+
+const getLessonTypeConfig = (lessonType) => lessonTypeConfig[lessonType] || lessonTypeConfig.video;
+
 const CourseContentManager = ({ panel = "instructor" }) => {
   const { courseId } = useParams();
   const navigate = useNavigate();
@@ -98,6 +160,20 @@ const CourseContentManager = ({ panel = "instructor" }) => {
       setError("Lesson title is required.");
       return;
     }
+    const normalizedType = draft.lessonType || "video";
+    const config = getLessonTypeConfig(normalizedType);
+    const normalizedVideoUrl = draft.videoUrl?.trim() || "";
+    const normalizedContent = draft.content?.trim() || "";
+    const normalizedDuration = draft.durationMinutes ? Number(draft.durationMinutes) : null;
+
+    if (config.requireVideoUrl && !normalizedVideoUrl) {
+      setError(`${config.videoLabel || "Link"} is required for ${normalizedType} lessons.`);
+      return;
+    }
+    if (config.requireContent && !normalizedContent) {
+      setError(`${config.contentLabel || "Content"} is required for ${normalizedType} lessons.`);
+      return;
+    }
 
     setBusyAction(`lesson-${moduleId}`);
     setError("");
@@ -107,11 +183,11 @@ const CourseContentManager = ({ panel = "instructor" }) => {
         `/modules/${moduleId}/lessons`,
         {
           title: draft.title.trim(),
-          lessonType: draft.lessonType || "video",
-          videoUrl: draft.videoUrl?.trim() || "",
-          durationMinutes: draft.durationMinutes ? Number(draft.durationMinutes) : null,
-          content: draft.content?.trim() || "",
-          isPreview: !!draft.isPreview
+          lessonType: normalizedType,
+          videoUrl: config.showVideoUrl ? normalizedVideoUrl : "",
+          durationMinutes: config.showDuration ? normalizedDuration : null,
+          content: config.showContent ? normalizedContent : "",
+          isPreview: config.allowPreview ? !!draft.isPreview : false
         },
         { headers: authHeaders }
       );
@@ -201,6 +277,7 @@ const CourseContentManager = ({ panel = "instructor" }) => {
           ) : (
             modules.map((module) => {
               const lessonDraft = lessonDraftByModule[module.id] || defaultLessonDraft;
+              const typeConfig = getLessonTypeConfig(lessonDraft.lessonType);
               return (
                 <article key={module.id} className="p-5 border rounded-xl border-fuchsia-700 bg-stone-950">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -217,7 +294,9 @@ const CourseContentManager = ({ panel = "instructor" }) => {
                         <p className="font-medium">{lesson.title}</p>
                         <p className="mt-1 text-xs text-gray-400">
                           {lesson.lessonType}
-                          {lesson.videoUrl ? " | Video URL added" : " | No video URL"}
+                          {lesson.videoUrl ? " | Link added" : ""}
+                          {lesson.durationMinutes ? ` | ${lesson.durationMinutes} min` : ""}
+                          {lesson.content ? " | Content added" : ""}
                           {lesson.isPreview ? " | Preview" : ""}
                         </p>
                       </li>
@@ -243,35 +322,63 @@ const CourseContentManager = ({ panel = "instructor" }) => {
                       <option value="quiz">Quiz</option>
                       <option value="assignment">Assignment</option>
                     </select>
-                    <input
-                      type="text"
-                      placeholder="Video URL (YouTube or MP4 URL)"
-                      className="p-3 text-white border rounded-lg bg-black border-stone-700 md:col-span-2"
-                      value={lessonDraft.videoUrl}
-                      onChange={(event) => updateLessonDraft(module.id, "videoUrl", event.target.value)}
-                    />
-                    <input
-                      type="number"
-                      min="1"
-                      placeholder="Duration in minutes"
-                      className="p-3 text-white border rounded-lg bg-black border-stone-700"
-                      value={lessonDraft.durationMinutes}
-                      onChange={(event) => updateLessonDraft(module.id, "durationMinutes", event.target.value)}
-                    />
-                    <label className="flex items-center gap-2 p-3 text-sm border rounded-lg border-stone-700">
-                      <input
-                        type="checkbox"
-                        checked={!!lessonDraft.isPreview}
-                        onChange={(event) => updateLessonDraft(module.id, "isPreview", event.target.checked)}
-                      />
-                      Mark as preview lesson
-                    </label>
-                    <textarea
-                      placeholder="Lesson notes/content"
-                      className="h-24 p-3 text-white border rounded-lg resize-none bg-black border-stone-700 md:col-span-2"
-                      value={lessonDraft.content}
-                      onChange={(event) => updateLessonDraft(module.id, "content", event.target.value)}
-                    />
+
+                    {typeConfig.showVideoUrl && (
+                      <label className="md:col-span-2">
+                        <span className="text-xs text-gray-300">{typeConfig.videoLabel}</span>
+                        <input
+                          type="text"
+                          placeholder={typeConfig.videoPlaceholder}
+                          className="w-full p-3 mt-1 text-white border rounded-lg bg-black border-stone-700"
+                          value={lessonDraft.videoUrl}
+                          onChange={(event) => updateLessonDraft(module.id, "videoUrl", event.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {typeConfig.showDuration && (
+                      <label>
+                        <span className="text-xs text-gray-300">{typeConfig.durationLabel}</span>
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder={typeConfig.durationLabel}
+                          className="w-full p-3 mt-1 text-white border rounded-lg bg-black border-stone-700"
+                          value={lessonDraft.durationMinutes}
+                          onChange={(event) => updateLessonDraft(module.id, "durationMinutes", event.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {typeConfig.allowPreview && (
+                      <label className="flex items-center gap-2 p-3 mt-5 text-sm border rounded-lg border-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={!!lessonDraft.isPreview}
+                          onChange={(event) => updateLessonDraft(module.id, "isPreview", event.target.checked)}
+                        />
+                        Mark as preview lesson
+                      </label>
+                    )}
+
+                    {typeConfig.showContent && (
+                      <label className="md:col-span-2">
+                        <span className="text-xs text-gray-300">{typeConfig.contentLabel}</span>
+                        <textarea
+                          placeholder={typeConfig.contentPlaceholder}
+                          className="w-full h-24 p-3 mt-1 text-white border rounded-lg resize-none bg-black border-stone-700"
+                          value={lessonDraft.content}
+                          onChange={(event) => updateLessonDraft(module.id, "content", event.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {(lessonDraft.lessonType === "quiz" || lessonDraft.lessonType === "assignment") && (
+                      <p className="text-xs text-yellow-300 md:col-span-2">
+                        Tip: This creates the lesson step. Add full {lessonDraft.lessonType} items from the course {lessonDraft.lessonType} page.
+                      </p>
+                    )}
+
                     <button
                       type="submit"
                       className="px-4 py-3 text-white rounded-lg bg-fuchsia-700 hover:bg-fuchsia-600 md:col-span-2 disabled:opacity-60"

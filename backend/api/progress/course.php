@@ -35,7 +35,6 @@ if ($targetUserId !== (int) $authUser['id']) {
 }
 
 $courseProgress = null;
-$courseProgressStatus = null;
 if (table_exists($pdo, 'user_course_progress')) {
     $courseStmt = $pdo->prepare(
         'SELECT progress_percent, completed_lessons, total_lessons, status, last_activity_at, completed_at
@@ -46,7 +45,6 @@ if (table_exists($pdo, 'user_course_progress')) {
     $courseStmt->execute([$targetUserId, $courseId]);
     $row = $courseStmt->fetch();
     if ($row) {
-        $courseProgressStatus = (string) $row['status'];
         $courseProgress = [
             'progressPercent' => (float) $row['progress_percent'],
             'completedLessons' => (int) $row['completed_lessons'],
@@ -58,8 +56,9 @@ if (table_exists($pdo, 'user_course_progress')) {
     }
 }
 
+$completion = evaluate_course_completion_requirements($pdo, (int) $targetUserId, $courseId);
 $certificate = null;
-if ($courseProgressStatus === 'completed') {
+if (!empty($completion['eligible'])) {
     $certificate = issue_course_certificate(
         $pdo,
         (int) $targetUserId,
@@ -99,5 +98,6 @@ json_success([
     'courseId' => $courseId,
     'courseProgress' => $courseProgress,
     'lessonProgress' => $lessonProgress,
+    'completion' => $completion,
     'certificate' => $certificate
 ], 'Course progress fetched');

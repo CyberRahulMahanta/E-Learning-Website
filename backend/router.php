@@ -23,6 +23,7 @@ $routes = [
     ['methods' => ['GET'], 'pattern' => '#^courses/get/(?P<id>[^/]+)$#', 'file' => __DIR__ . '/api/courses/details.php'],
     ['methods' => ['GET'], 'pattern' => '#^courses/instructor/(?P<id>[^/]+)$#', 'file' => __DIR__ . '/api/courses/instructor.php'],
     ['methods' => ['GET'], 'pattern' => '#^courses/(?P<id>[^/]+)/content$#', 'file' => __DIR__ . '/api/learning/content.php'],
+    ['methods' => ['GET'], 'pattern' => '#^courses/(?P<id>[^/]+)/flow-status$#', 'file' => __DIR__ . '/api/courses/flow_status.php'],
     ['methods' => ['POST'], 'pattern' => '#^courses/(?P<id>[^/]+)/modules$#', 'file' => __DIR__ . '/api/learning/module_add.php'],
     ['methods' => ['GET'], 'pattern' => '#^courses/(?P<id>[^/]+)/progress$#', 'file' => __DIR__ . '/api/progress/course.php'],
     ['methods' => ['GET'], 'pattern' => '#^courses/(?P<id>[^/]+)/certificate$#', 'file' => __DIR__ . '/api/certificates/course.php'],

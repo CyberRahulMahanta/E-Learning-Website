@@ -137,8 +137,9 @@ $courseProgressStmt->execute([
     $courseCompletedAt
 ]);
 
+$completion = evaluate_course_completion_requirements($pdo, (int) $authUser['id'], $courseId);
 $certificate = null;
-if ($courseStatus === 'completed' && $totalLessons > 0) {
+if (!empty($completion['eligible'])) {
     $certificate = issue_course_certificate(
         $pdo,
         (int) $authUser['id'],
@@ -149,6 +150,8 @@ if ($courseStatus === 'completed' && $totalLessons > 0) {
             'totalLessons' => $totalLessons
         ]
     );
+} else {
+    $certificate = get_user_course_certificate($pdo, (int) $authUser['id'], $courseId);
 }
 
 json_success([
@@ -165,5 +168,6 @@ json_success([
         'totalLessons' => $totalLessons,
         'status' => $courseStatus
     ],
+    'completion' => $completion,
     'certificate' => $certificate
 ], 'Progress updated');

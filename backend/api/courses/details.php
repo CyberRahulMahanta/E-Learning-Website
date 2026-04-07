@@ -106,7 +106,8 @@ if ($authUser) {
         }
     }
 
-    if ($progress && (string) ($progress['status'] ?? '') === 'completed') {
+    $completion = evaluate_course_completion_requirements($pdo, (int) $authUser['id'], (int) $course['id']);
+    if (!empty($completion['eligible'])) {
         $certificate = issue_course_certificate(
             $pdo,
             (int) $authUser['id'],
@@ -123,6 +124,7 @@ if ($authUser) {
         'enrolled' => $enrolled,
         'wishlisted' => $wishlisted,
         'progress' => $progress,
+        'completion' => $completion,
         'certificate' => $certificate
     ];
 }

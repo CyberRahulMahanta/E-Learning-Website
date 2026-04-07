@@ -38,7 +38,13 @@ $passPercentage = isset($data['passPercentage']) ? (float) $data['passPercentage
 $timeLimitMinutes = to_int($data['timeLimitMinutes'] ?? null);
 $moduleId = to_int($data['moduleId'] ?? null);
 $lessonId = to_int($data['lessonId'] ?? null);
+$isFinalAssessment = to_bool($data['isFinalAssessment'] ?? $data['is_final_assessment'] ?? false, false);
 $questions = $data['questions'] ?? [];
+
+if ($isFinalAssessment) {
+    $moduleId = null;
+    $lessonId = null;
+}
 
 if ($title === '') {
     json_error('Quiz title is required', null, 422);
@@ -141,20 +147,39 @@ foreach ($questions as $index => $question) {
 try {
     $pdo->beginTransaction();
 
-    $quizStmt = $pdo->prepare(
-        'INSERT INTO quizzes
-         (course_id, module_id, lesson_id, title, description, pass_percentage, time_limit_minutes, is_active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1)'
-    );
-    $quizStmt->execute([
-        $courseId,
-        $moduleId,
-        $lessonId,
-        $title,
-        $description !== '' ? $description : null,
-        $passPercentage,
-        $timeLimitMinutes
-    ]);
+    $hasFinalAssessmentColumn = column_exists($pdo, 'quizzes', 'is_final_assessment');
+    if ($hasFinalAssessmentColumn) {
+        $quizStmt = $pdo->prepare(
+            'INSERT INTO quizzes
+             (course_id, module_id, lesson_id, title, description, pass_percentage, time_limit_minutes, is_active, is_final_assessment)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)'
+        );
+        $quizStmt->execute([
+            $courseId,
+            $moduleId,
+            $lessonId,
+            $title,
+            $description !== '' ? $description : null,
+            $passPercentage,
+            $timeLimitMinutes,
+            $isFinalAssessment ? 1 : 0
+        ]);
+    } else {
+        $quizStmt = $pdo->prepare(
+            'INSERT INTO quizzes
+             (course_id, module_id, lesson_id, title, description, pass_percentage, time_limit_minutes, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1)'
+        );
+        $quizStmt->execute([
+            $courseId,
+            $moduleId,
+            $lessonId,
+            $title,
+            $description !== '' ? $description : null,
+            $passPercentage,
+            $timeLimitMinutes
+        ]);
+    }
 
     $quizId = (int) $pdo->lastInsertId();
 
@@ -194,6 +219,7 @@ json_success([
         'description' => $description !== '' ? $description : null,
         'passPercentage' => $passPercentage,
         'timeLimitMinutes' => $timeLimitMinutes,
+        'isFinalAssessment' => $isFinalAssessment,
         'questionCount' => count($normalizedQuestions),
         'questions' => $normalizedQuestions
     ]

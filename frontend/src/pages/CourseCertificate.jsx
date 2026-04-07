@@ -26,6 +26,7 @@ const CourseCertificate = () => {
   const [pageError, setPageError] = useState("");
   const [certificateData, setCertificateData] = useState(null);
   const [progressData, setProgressData] = useState(null);
+  const [completionData, setCompletionData] = useState(null);
   const [eligible, setEligible] = useState(false);
 
   const course = getCourseById(courseId);
@@ -50,6 +51,7 @@ const CourseCertificate = () => {
 
       setCertificateData(certRes?.data?.certificate || null);
       setProgressData(certRes?.data?.courseProgress || null);
+      setCompletionData(certRes?.data?.completion || null);
       setEligible(!!certRes?.data?.eligible);
       setIsLoading(false);
     };
@@ -98,6 +100,15 @@ const CourseCertificate = () => {
                 {" "}
                 {Number(progressData?.progressPercent || 0).toFixed(2)}%
               </p>
+              {completionData?.steps && (
+                <div className="grid gap-2 mt-4">
+                  {Object.values(completionData.steps).map((step) => (
+                    <p key={step.key} className={`text-xs ${step.passed ? "text-green-300" : "text-yellow-300"}`}>
+                      {step.label}: {Number(step.completed || 0)}/{Number(step.required || 0)} {step.passed ? "(done)" : "(pending)"}
+                    </p>
+                  ))}
+                </div>
+              )}
               {!eligible && (
                 <button
                   className="px-5 py-2 mt-4 text-white rounded-lg bg-fuchsia-700 hover:bg-fuchsia-600"

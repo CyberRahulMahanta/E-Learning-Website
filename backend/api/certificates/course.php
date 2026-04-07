@@ -121,7 +121,8 @@ if ($status !== 'completed') {
     }
 }
 
-$eligible = ($status === 'completed') || ($totalLessons > 0 && $progressPercent >= 100);
+$completion = evaluate_course_completion_requirements($pdo, $targetUserId, $courseId);
+$eligible = !empty($completion['eligible']);
 
 $certificate = null;
 if ($eligible) {
@@ -150,6 +151,7 @@ json_success([
     'eligible' => (bool) $eligible,
     'issued' => (bool) $certificate,
     'certificate' => $certificate,
+    'completion' => $completion,
     'courseProgress' => [
         'progressPercent' => $progressPercent,
         'completedLessons' => $completedLessons,

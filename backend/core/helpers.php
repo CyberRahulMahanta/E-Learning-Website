@@ -566,6 +566,30 @@ function table_exists($pdo, $tableName, $forceRefresh = false) {
     }
 }
 
+function column_exists($pdo, $tableName, $columnName, $forceRefresh = false) {
+    static $cache = [];
+    $cacheKey = $tableName . '::' . $columnName;
+    if (!$forceRefresh && array_key_exists($cacheKey, $cache)) {
+        return $cache[$cacheKey];
+    }
+
+    try {
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $tableName) || !preg_match('/^[A-Za-z0-9_]+$/', $columnName)) {
+            $cache[$cacheKey] = false;
+            return false;
+        }
+
+        $stmt = $pdo->prepare('SHOW COLUMNS FROM `' . $tableName . '` LIKE ?');
+        $stmt->execute([$columnName]);
+        $exists = (bool) $stmt->fetchColumn();
+        $cache[$cacheKey] = $exists;
+        return $exists;
+    } catch (Throwable $e) {
+        $cache[$cacheKey] = false;
+        return false;
+    }
+}
+
 function normalize_certificate($certificate, $user = null, $course = null) {
     if (!$certificate) {
         return null;
@@ -653,6 +677,181 @@ function issue_course_certificate($pdo, $userId, $courseId, $metadata = null) {
     }
 
     return get_user_course_certificate($pdo, (int) $userId, (int) $courseId);
+}
+
+function evaluate_course_completion_requirements($pdo, $userId, $courseId) {
+    $userId = (int) $userId;
+    $courseId = (int) $courseId;
+    if ($userId <= 0 || $courseId <= 0) {
+        return [
+            'eligible' => false,
+            'steps' => []
+        ];
+    }
+
+    $isFinalColumn = column_exists($pdo, 'quizzes', 'is_final_assessment');
+    $nonFinalQuizCondition = $isFinalColumn ? 'q.is_final_assessment = 0' : '1=1';
+    $finalQuizCondition = $isFinalColumn ? 'q.is_final_assessment = 1' : '(LOWER(q.title) LIKE \'%final%\' AND q.module_id IS NULL AND q.lesson_id IS NULL)';
+
+    $lessonsTotal = 0;
+    $lessonsCompleted = 0;
+    if (table_exists($pdo, 'course_modules') && table_exists($pdo, 'course_lessons')) {
+        $lessonTotalStmt = $pdo->prepare(
+            'SELECT COUNT(l.id)
+             FROM course_modules m
+             JOIN course_lessons l ON l.module_id = m.id
+             WHERE m.course_id = ? AND l.is_published = 1'
+        );
+        $lessonTotalStmt->execute([$courseId]);
+        $lessonsTotal = (int) $lessonTotalStmt->fetchColumn();
+    }
+
+    if ($lessonsTotal > 0 && table_exists($pdo, 'user_lesson_progress')) {
+        $lessonCompletedStmt = $pdo->prepare(
+            'SELECT COUNT(lp.id)
+             FROM user_lesson_progress lp
+             JOIN course_lessons l ON l.id = lp.lesson_id
+             JOIN course_modules m ON m.id = l.module_id
+             WHERE lp.user_id = ?
+               AND m.course_id = ?
+               AND lp.status = \'completed\''
+        );
+        $lessonCompletedStmt->execute([$userId, $courseId]);
+        $lessonsCompleted = (int) $lessonCompletedStmt->fetchColumn();
+    }
+
+    $lessonsPassed = $lessonsTotal > 0 ? ($lessonsCompleted >= $lessonsTotal) : true;
+
+    $moduleQuizRequired = 0;
+    $moduleQuizPassed = 0;
+    if (table_exists($pdo, 'quizzes') && table_exists($pdo, 'quiz_attempts')) {
+        $moduleQuizSql = "
+            SELECT q.module_id,
+                   MAX(
+                       CASE
+                           WHEN qa.id IS NOT NULL
+                                AND qa.total_marks > 0
+                                AND ((qa.score / qa.total_marks) * 100) >= q.pass_percentage
+                           THEN 1 ELSE 0
+                       END
+                   ) AS passed
+            FROM quizzes q
+            LEFT JOIN quiz_attempts qa
+                   ON qa.quiz_id = q.id
+                  AND qa.user_id = ?
+                  AND qa.status IN ('submitted', 'evaluated')
+            WHERE q.course_id = ?
+              AND q.is_active = 1
+              AND q.module_id IS NOT NULL
+              AND " . $nonFinalQuizCondition . "
+            GROUP BY q.module_id
+        ";
+        $moduleQuizStmt = $pdo->prepare($moduleQuizSql);
+        $moduleQuizStmt->execute([$userId, $courseId]);
+        $moduleRows = $moduleQuizStmt->fetchAll();
+        $moduleQuizRequired = count($moduleRows);
+        $moduleQuizPassed = count(array_filter($moduleRows, function ($row) {
+            return (int) $row['passed'] === 1;
+        }));
+    }
+
+    $moduleQuizzesPassed = $moduleQuizRequired > 0 ? ($moduleQuizPassed >= $moduleQuizRequired) : true;
+
+    $assignmentsRequired = 0;
+    $assignmentsSubmitted = 0;
+    if (table_exists($pdo, 'assignments')) {
+        $assignmentTotalStmt = $pdo->prepare(
+            'SELECT COUNT(id)
+             FROM assignments
+             WHERE course_id = ? AND is_active = 1'
+        );
+        $assignmentTotalStmt->execute([$courseId]);
+        $assignmentsRequired = (int) $assignmentTotalStmt->fetchColumn();
+    }
+    if ($assignmentsRequired > 0 && table_exists($pdo, 'assignment_submissions')) {
+        $assignmentSubmittedStmt = $pdo->prepare(
+            'SELECT COUNT(DISTINCT assignment_id)
+             FROM assignment_submissions
+             WHERE user_id = ?
+               AND assignment_id IN (
+                   SELECT id FROM assignments WHERE course_id = ? AND is_active = 1
+               )'
+        );
+        $assignmentSubmittedStmt->execute([$userId, $courseId]);
+        $assignmentsSubmitted = (int) $assignmentSubmittedStmt->fetchColumn();
+    }
+
+    $assignmentsPassed = $assignmentsRequired > 0 ? ($assignmentsSubmitted >= $assignmentsRequired) : true;
+
+    $finalRequired = 0;
+    $finalPassed = 0;
+    if (table_exists($pdo, 'quizzes') && table_exists($pdo, 'quiz_attempts')) {
+        $finalTotalStmt = $pdo->prepare(
+            'SELECT COUNT(id)
+             FROM quizzes q
+             WHERE q.course_id = ?
+               AND q.is_active = 1
+               AND ' . $finalQuizCondition
+        );
+        $finalTotalStmt->execute([$courseId]);
+        $finalRequired = (int) $finalTotalStmt->fetchColumn();
+
+        if ($finalRequired > 0) {
+            $finalPassedStmt = $pdo->prepare(
+                "SELECT COUNT(DISTINCT q.id)
+                 FROM quizzes q
+                 JOIN quiz_attempts qa
+                   ON qa.quiz_id = q.id
+                  AND qa.user_id = ?
+                  AND qa.status IN ('submitted', 'evaluated')
+                 WHERE q.course_id = ?
+                   AND q.is_active = 1
+                   AND " . $finalQuizCondition . "
+                   AND qa.total_marks > 0
+                   AND ((qa.score / qa.total_marks) * 100) >= q.pass_percentage"
+            );
+            $finalPassedStmt->execute([$userId, $courseId]);
+            $finalPassed = (int) $finalPassedStmt->fetchColumn();
+        }
+    }
+
+    $finalAssessmentPassed = $finalRequired > 0 ? ($finalPassed >= $finalRequired) : true;
+
+    $steps = [
+        'lessons' => [
+            'key' => 'lessons',
+            'label' => 'Watch Lessons',
+            'required' => $lessonsTotal,
+            'completed' => $lessonsCompleted,
+            'passed' => $lessonsPassed
+        ],
+        'moduleQuizzes' => [
+            'key' => 'moduleQuizzes',
+            'label' => 'Take Module Quizzes',
+            'required' => $moduleQuizRequired,
+            'completed' => $moduleQuizPassed,
+            'passed' => $moduleQuizzesPassed
+        ],
+        'assignments' => [
+            'key' => 'assignments',
+            'label' => 'Submit Assignments',
+            'required' => $assignmentsRequired,
+            'completed' => $assignmentsSubmitted,
+            'passed' => $assignmentsPassed
+        ],
+        'finalAssessment' => [
+            'key' => 'finalAssessment',
+            'label' => 'Final Assessment',
+            'required' => $finalRequired,
+            'completed' => $finalPassed,
+            'passed' => $finalAssessmentPassed
+        ]
+    ];
+
+    return [
+        'eligible' => $lessonsPassed && $moduleQuizzesPassed && $assignmentsPassed && $finalAssessmentPassed,
+        'steps' => $steps
+    ];
 }
 
 function get_course_syllabus($pdo, $courseId) {

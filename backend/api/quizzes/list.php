@@ -25,6 +25,7 @@ if (!$course) {
 $courseId = (int) $course['id'];
 $isOwner = (int) $course['instructor_id'] === (int) $authUser['id'];
 $isAdmin = (string) $authUser['role'] === 'admin';
+$hasFinalAssessmentColumn = column_exists($pdo, 'quizzes', 'is_final_assessment');
 
 if (!$isOwner && !$isAdmin) {
     $enrollmentStmt = $pdo->prepare('SELECT 1 FROM enrollments WHERE user_id = ? AND course_id = ? LIMIT 1');
@@ -36,6 +37,7 @@ if (!$isOwner && !$isAdmin) {
 
 $quizStmt = $pdo->prepare(
     'SELECT q.*,
+            ' . ($hasFinalAssessmentColumn ? 'q.is_final_assessment' : '0 AS is_final_assessment') . ',
             COALESCE(meta.question_count, 0) AS question_count,
             COALESCE(meta.total_marks, 0) AS total_marks
      FROM quizzes q
@@ -136,6 +138,7 @@ $quizzes = array_map(function ($quiz) use ($questionsByQuiz, $attemptMap) {
         'description' => $quiz['description'],
         'passPercentage' => (float) $quiz['pass_percentage'],
         'timeLimitMinutes' => to_int($quiz['time_limit_minutes']),
+        'isFinalAssessment' => (bool) $quiz['is_final_assessment'],
         'questionCount' => (int) $quiz['question_count'],
         'totalMarks' => (float) $quiz['total_marks'],
         'questions' => $questionsByQuiz[$quizId] ?? [],
@@ -150,4 +153,3 @@ json_success([
     'courseSlug' => $course['slug'],
     'quizzes' => $quizzes
 ], 'Quizzes fetched');
-
