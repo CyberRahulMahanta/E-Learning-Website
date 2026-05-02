@@ -27,31 +27,91 @@ if ((string) $authUser['role'] !== 'admin' && (int) $order['user_id'] !== (int) 
 }
 
 $data = get_input_data();
-$status = sanitize($data['status'] ?? 'paid');
+$status = strtolower(sanitize($data['status'] ?? 'paid'));
 $gatewayOrderId = sanitize($data['gatewayOrderId'] ?? $data['gateway_order_id'] ?? '');
 $gatewayPaymentId = sanitize($data['gatewayPaymentId'] ?? $data['gateway_payment_id'] ?? '');
+$gatewaySignature = sanitize($data['gatewaySignature'] ?? $data['gateway_signature'] ?? '');
 
 $allowedStatuses = ['paid', 'failed', 'cancelled', 'pending', 'refunded'];
 if (!in_array($status, $allowedStatuses, true)) {
     json_error('Invalid status', null, 422);
 }
 
+$existingMetadata = [];
+if (!empty($order['metadata'])) {
+    $decodedMetadata = json_decode((string) $order['metadata'], true);
+    if (json_last_error() === JSON_ERROR_NONE && is_array($decodedMetadata)) {
+        $existingMetadata = $decodedMetadata;
+    }
+}
+
+$effectiveGatewayOrderId = $gatewayOrderId !== '' ? $gatewayOrderId : (string) ($order['gateway_order_id'] ?? '');
+$effectiveGatewayPaymentId = $gatewayPaymentId !== '' ? $gatewayPaymentId : (string) ($order['gateway_payment_id'] ?? '');
+$wasAlreadyPaid = (string) ($order['status'] ?? '') === 'paid';
+
+if ((string) ($order['gateway'] ?? '') === 'razorpay' && $status === 'paid') {
+    if (RAZORPAY_KEY_SECRET === '') {
+        json_error('Razorpay signature verification is not configured', null, 500);
+    }
+
+    if ($effectiveGatewayOrderId === '' || $effectiveGatewayPaymentId === '' || $gatewaySignature === '') {
+        json_error('Missing Razorpay verification fields', null, 422);
+    }
+
+    if (!empty($order['gateway_order_id']) && (string) $order['gateway_order_id'] !== $effectiveGatewayOrderId) {
+        json_error('Gateway order mismatch', null, 409);
+    }
+
+    $expectedSignature = hash_hmac('sha256', $effectiveGatewayOrderId . '|' . $effectiveGatewayPaymentId, RAZORPAY_KEY_SECRET);
+    if (!hash_equals($expectedSignature, $gatewaySignature)) {
+        $existingMetadata['verification'] = [
+            'gateway' => 'razorpay',
+            'verified' => false,
+            'verifiedAt' => date('c'),
+            'reason' => 'signature_mismatch'
+        ];
+
+        $failedMetaStmt = $pdo->prepare(
+            'UPDATE payment_orders
+             SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?'
+        );
+        $failedMetaStmt->execute([json_encode($existingMetadata, JSON_UNESCAPED_SLASHES), $orderId]);
+        json_error('Invalid Razorpay signature', null, 400);
+    }
+
+    $existingMetadata['verification'] = [
+        'gateway' => 'razorpay',
+        'verified' => true,
+        'verifiedAt' => date('c'),
+        'signature' => $gatewaySignature
+    ];
+}
+
+$existingMetadata['confirmPayload'] = [
+    'status' => $status,
+    'gatewayOrderId' => $effectiveGatewayOrderId !== '' ? $effectiveGatewayOrderId : null,
+    'gatewayPaymentId' => $effectiveGatewayPaymentId !== '' ? $effectiveGatewayPaymentId : null,
+    'receivedAt' => date('c')
+];
+
 $updateStmt = $pdo->prepare(
     'UPDATE payment_orders
-     SET status = ?, gateway_order_id = ?, gateway_payment_id = ?, paid_at = ?, updated_at = CURRENT_TIMESTAMP
+     SET status = ?, gateway_order_id = ?, gateway_payment_id = ?, metadata = ?, paid_at = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?'
 );
-$paidAt = $status === 'paid' ? date('Y-m-d H:i:s') : null;
+$paidAt = $status === 'paid' ? ($order['paid_at'] ?: date('Y-m-d H:i:s')) : null;
 $updateStmt->execute([
     $status,
-    $gatewayOrderId !== '' ? $gatewayOrderId : null,
-    $gatewayPaymentId !== '' ? $gatewayPaymentId : null,
+    $effectiveGatewayOrderId !== '' ? $effectiveGatewayOrderId : null,
+    $effectiveGatewayPaymentId !== '' ? $effectiveGatewayPaymentId : null,
+    json_encode($existingMetadata, JSON_UNESCAPED_SLASHES),
     $paidAt,
     $orderId
 ]);
 
 $enrollmentCreated = false;
-if ($status === 'paid') {
+if ($status === 'paid' && !$wasAlreadyPaid) {
     $existsStmt = $pdo->prepare('SELECT id FROM enrollments WHERE user_id = ? AND course_id = ? LIMIT 1');
     $existsStmt->execute([(int) $order['user_id'], (int) $order['course_id']]);
     $enrollment = $existsStmt->fetch();
@@ -64,7 +124,7 @@ if ($status === 'paid') {
             (int) $order['user_id'],
             (int) $order['course_id'],
             $order['gateway'] ?: 'manual',
-            $gatewayPaymentId !== '' ? $gatewayPaymentId : ($order['order_code'] ?? null)
+            $effectiveGatewayPaymentId !== '' ? $effectiveGatewayPaymentId : ($order['order_code'] ?? null)
         ]);
         $enrollmentCreated = true;
     }
@@ -123,8 +183,8 @@ json_success([
         'gateway' => $updatedOrder['gateway'],
         'gatewayOrderId' => $updatedOrder['gateway_order_id'],
         'gatewayPaymentId' => $updatedOrder['gateway_payment_id'],
-        'paidAt' => $updatedOrder['paid_at']
+        'paidAt' => $updatedOrder['paid_at'],
+        'metadata' => !empty($updatedOrder['metadata']) ? json_decode($updatedOrder['metadata'], true) : null
     ],
     'enrollmentCreated' => $enrollmentCreated
 ], 'Order updated');
-

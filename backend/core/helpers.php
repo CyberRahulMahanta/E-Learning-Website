@@ -607,6 +607,7 @@ function normalize_certificate($certificate, $user = null, $course = null) {
         'id' => (int) $certificate['id'],
         '_id' => (int) $certificate['id'],
         'certificateCode' => $certificate['certificate_code'],
+        'verifyPath' => '/certificate/verify/' . urlencode((string) $certificate['certificate_code']),
         'issueDate' => $certificate['issue_date'],
         'userId' => (int) $certificate['user_id'],
         'courseId' => (int) $certificate['course_id'],
@@ -634,6 +635,47 @@ function get_user_course_certificate($pdo, $userId, $courseId) {
         return null;
     }
     return normalize_certificate($row);
+}
+
+function get_certificate_by_code($pdo, $certificateCode) {
+    $certificateCode = trim((string) $certificateCode);
+    if ($certificateCode === '' || !table_exists($pdo, 'certificates')) {
+        return null;
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT cert.id, cert.user_id, cert.course_id, cert.certificate_code, cert.issue_date, cert.metadata, cert.created_at,
+                u.username AS user_username, u.email AS user_email,
+                c.id AS course_id_ref, c.slug AS course_slug, c.name AS course_name, c.title AS course_title, c.image AS course_image
+         FROM certificates cert
+         JOIN users u ON u.id = cert.user_id
+         JOIN courses c ON c.id = cert.course_id
+         WHERE cert.certificate_code = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$certificateCode]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        return null;
+    }
+
+    $certificate = normalize_certificate($row);
+    $certificate['user'] = [
+        'id' => (int) $row['user_id'],
+        '_id' => (int) $row['user_id'],
+        'username' => $row['user_username'],
+        'email' => $row['user_email']
+    ];
+    $certificate['course'] = [
+        'id' => (int) $row['course_id_ref'],
+        '_id' => (int) $row['course_id_ref'],
+        'slug' => $row['course_slug'],
+        'name' => $row['course_name'],
+        'title' => $row['course_title'],
+        'image' => $row['course_image']
+    ];
+
+    return $certificate;
 }
 
 function generate_certificate_code($userId, $courseId) {

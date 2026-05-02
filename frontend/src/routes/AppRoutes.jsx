@@ -7,6 +7,7 @@ import {
   About,
   CourseAssignments,
   CourseCertificate,
+  CourseCertificateVerify,
   Courses,
   CourseQuiz,
   EditProfile,
@@ -18,7 +19,7 @@ import {
   Signup,
   Wishlist
 } from "../pages/Index";
-import { AddCourse, AddInstructors, AdminCourse, AdminDashboard, AdminInstructor, AdminStudent, EditCourse, EditInstructor, EditStudent } from "../components/Admin/Index";
+import { AddCourse, AddInstructors, AdminCourse, AdminDashboard, AdminInstructor, AdminPayments, AdminStudent, EditCourse, EditInstructor, EditStudent } from "../components/Admin/Index";
 import { CourseContentManager, InstructorCourses, InstructorDashboard, InstructorProfile, InstructorQuizChecks, InstructorStudents } from "../components/Instructor/Index";
 import CoursePage from "../components/CoursePage";
 import PayScannerPage from "../components/PayScannerPage";
@@ -87,9 +88,11 @@ function AppRoutes() {
         <Route path="/courses/:courseId/quizzes" element={<RequireAuth><PublicLayout><CourseQuiz /></PublicLayout></RequireAuth>} />
         <Route path="/courses/:courseId/assignments" element={<RequireAuth><PublicLayout><CourseAssignments /></PublicLayout></RequireAuth>} />
         <Route path="/courses/:courseId/certificate" element={<RequireAuth><PublicLayout><CourseCertificate /></PublicLayout></RequireAuth>} />
+        <Route path="/certificate/verify/:certificateCode" element={<PublicLayout><CourseCertificateVerify /></PublicLayout>} />
 
         <Route path="/admin/dashboard" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><AdminDashboard /></AdminLayout></RequireRole></RequireAuth>} />
         <Route path="/admin/courses" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><AdminCourse /></AdminLayout></RequireRole></RequireAuth>} />
+        <Route path="/admin/payments" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><AdminPayments /></AdminLayout></RequireRole></RequireAuth>} />
         <Route path="/admin/students" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><AdminStudent /></AdminLayout></RequireRole></RequireAuth>} />
         <Route path="/admin/instructors" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><AdminInstructor /></AdminLayout></RequireRole></RequireAuth>} />
         <Route path="/admin/students/edit/:id" element={<RequireAuth><RequireRole roles={["admin"]}><AdminLayout><EditStudent /></AdminLayout></RequireRole></RequireAuth>} />

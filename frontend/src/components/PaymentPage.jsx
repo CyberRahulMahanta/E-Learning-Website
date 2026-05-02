@@ -79,7 +79,7 @@ const PaymentPage = () => {
     const result = await createOrder({
       courseId,
       couponCode: couponApplied?.code || couponCode.trim() || "",
-      gateway: "manual"
+      gateway: "razorpay"
     });
 
     if (!result.success) {
@@ -89,12 +89,15 @@ const PaymentPage = () => {
     }
 
     const order = result?.data?.order || null;
-    if (order) {
-      localStorage.setItem("activeOrder", JSON.stringify(order));
+    const razorpay = result?.data?.razorpay || null;
+    const checkoutOrder = order ? { ...order, razorpay } : null;
+
+    if (checkoutOrder) {
+      localStorage.setItem("activeOrder", JSON.stringify(checkoutOrder));
     }
 
     setSubmittingOrder(false);
-    navigate(`/courses/${courseId}/checkout`, { state: { order } });
+    navigate(`/courses/${courseId}/checkout`, { state: { order: checkoutOrder } });
   };
 
   return (

@@ -75,7 +75,8 @@ const AdminInstructor = () => {
             { name: "Dashboard", path: "/admin/dashboard" },
             { name: "Courses", path: "/admin/courses" },
             { name: "Students", path: "/admin/students" },
-            { name: "Instructors", path: "/admin/instructors" }
+            { name: "Instructors", path: "/admin/instructors" },
+            { name: "Payments", path: "/admin/payments" }
           ].map((item) => (
             <li key={item.name}>
               <Link

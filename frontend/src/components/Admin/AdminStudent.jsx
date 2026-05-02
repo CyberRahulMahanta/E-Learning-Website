@@ -14,7 +14,8 @@ const AdminStudent = () => {
     { name: "Dashboard", path: "/admin/dashboard" },
     { name: "Courses", path: "/admin/courses" },
     { name: "Students", path: "/admin/students" },
-    { name: "Instructors", path: "/admin/instructors" }
+    { name: "Instructors", path: "/admin/instructors" },
+    { name: "Payments", path: "/admin/payments" }
   ];
 
   useEffect(() => {

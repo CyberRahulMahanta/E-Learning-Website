@@ -138,6 +138,12 @@ const CourseCertificate = () => {
                     <div className="p-4 rounded-lg bg-black/40">
                       <p className="text-xs text-gray-300 uppercase">Certificate Code</p>
                       <p className="mt-1 text-lg text-white break-all">{certificateData.certificateCode}</p>
+                      <button
+                        className="px-3 py-1 mt-2 text-xs text-white rounded bg-stone-700 hover:bg-stone-600"
+                        onClick={() => navigate(certificateData.verifyPath || `/certificate/verify/${encodeURIComponent(certificateData.certificateCode)}`)}
+                      >
+                        Verify Certificate
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -155,6 +161,12 @@ const CourseCertificate = () => {
                   onClick={() => navigate("/my-courses")}
                 >
                   Go to My Courses
+                </button>
+                <button
+                  className="px-5 py-2 text-sm font-medium text-white rounded-lg bg-stone-700 hover:bg-stone-600"
+                  onClick={() => navigate(certificateData.verifyPath || `/certificate/verify/${encodeURIComponent(certificateData.certificateCode)}`)}
+                >
+                  Open Verification Page
                 </button>
               </div>
             </>

@@ -14,10 +14,23 @@ $authUser = ensure_authenticated($pdo);
 $data = get_input_data();
 $courseInput = sanitize($data['courseId'] ?? $data['course_id'] ?? $data['courseSlug'] ?? $data['course_slug'] ?? '');
 $couponCode = strtoupper(sanitize($data['couponCode'] ?? $data['coupon_code'] ?? ''));
-$gateway = sanitize($data['gateway'] ?? 'manual');
+$gateway = strtolower(sanitize($data['gateway'] ?? 'manual'));
 $currency = strtoupper(sanitize($data['currency'] ?? 'INR'));
 if ($currency === '') {
     $currency = 'INR';
+}
+$allowedGateways = ['manual', 'razorpay'];
+if (!in_array($gateway, $allowedGateways, true)) {
+    json_error('Unsupported payment gateway', null, 422);
+}
+
+if ($gateway === 'razorpay') {
+    if (!function_exists('curl_init')) {
+        json_error('cURL extension is required for Razorpay integration', null, 500);
+    }
+    if (RAZORPAY_KEY_ID === '' || RAZORPAY_KEY_SECRET === '') {
+        json_error('Razorpay is not configured on server', null, 500);
+    }
 }
 
 if ($courseInput === '') {
@@ -88,16 +101,19 @@ if ($couponCode !== '') {
 
 $finalAmount = max(0.0, $amount - $discount);
 $orderCode = 'ORD-' . date('YmdHis') . '-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+$baseMetadata = [
+    'courseSlug' => $course['slug'],
+    'client' => 'web',
+    'createdVia' => 'payment_order_api',
+    'initiatedAt' => date('c')
+];
 
 $orderStmt = $pdo->prepare(
     'INSERT INTO payment_orders
      (order_code, user_id, course_id, coupon_id, status, gateway, amount, discount_amount, final_amount, currency, metadata)
      VALUES (?, ?, ?, ?, "created", ?, ?, ?, ?, ?, ?)'
 );
-$metadata = json_encode([
-    'courseSlug' => $course['slug'],
-    'client' => 'web'
-], JSON_UNESCAPED_SLASHES);
+$metadata = json_encode($baseMetadata, JSON_UNESCAPED_SLASHES);
 $orderStmt->execute([
     $orderCode,
     (int) $authUser['id'],
@@ -112,6 +128,114 @@ $orderStmt->execute([
 ]);
 
 $orderId = (int) $pdo->lastInsertId();
+$gatewayOrderId = null;
+$razorpayPayload = null;
+
+if ($gateway === 'razorpay') {
+    if ($finalAmount <= 0) {
+        json_error('Final amount must be greater than 0 for Razorpay', null, 422);
+    }
+
+    $amountPaise = (int) round($finalAmount * 100);
+    $receipt = substr($orderCode, 0, 40);
+
+    $requestPayload = [
+        'amount' => $amountPaise,
+        'currency' => $currency,
+        'receipt' => $receipt,
+        'notes' => [
+            'local_order_id' => (string) $orderId,
+            'local_order_code' => $orderCode,
+            'course_id' => (string) $courseId,
+            'user_id' => (string) ((int) $authUser['id'])
+        ]
+    ];
+
+    $ch = curl_init('https://api.razorpay.com/v1/orders');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_USERPWD => RAZORPAY_KEY_ID . ':' . RAZORPAY_KEY_SECRET,
+        CURLOPT_HTTPAUTH => CURLAUTH_BASIC,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS => json_encode($requestPayload),
+        CURLOPT_TIMEOUT => 30
+    ]);
+
+    $responseRaw = curl_exec($ch);
+    $curlError = curl_error($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($responseRaw === false || $curlError !== '') {
+        $errorMetadata = $baseMetadata;
+        $errorMetadata['gatewayError'] = [
+            'message' => 'Failed to connect Razorpay',
+            'details' => $curlError
+        ];
+
+        $metaStmt = $pdo->prepare('UPDATE payment_orders SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+        $metaStmt->execute([json_encode($errorMetadata, JSON_UNESCAPED_SLASHES), $orderId]);
+        json_error('Unable to create Razorpay order', null, 502);
+    }
+
+    $responseData = json_decode($responseRaw, true);
+    if ($httpCode >= 400 || !is_array($responseData) || empty($responseData['id'])) {
+        $gatewayErrorMessage = is_array($responseData) && isset($responseData['error']['description'])
+            ? (string) $responseData['error']['description']
+            : 'Razorpay order creation failed';
+
+        $errorMetadata = $baseMetadata;
+        $errorMetadata['gatewayError'] = [
+            'message' => $gatewayErrorMessage,
+            'httpCode' => $httpCode,
+            'response' => $responseData
+        ];
+
+        $metaStmt = $pdo->prepare('UPDATE payment_orders SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+        $metaStmt->execute([json_encode($errorMetadata, JSON_UNESCAPED_SLASHES), $orderId]);
+        json_error($gatewayErrorMessage, null, 502);
+    }
+
+    $gatewayOrderId = (string) $responseData['id'];
+    $razorpayPayload = [
+        'keyId' => RAZORPAY_KEY_ID,
+        'orderId' => $gatewayOrderId,
+        'amountPaise' => $amountPaise,
+        'currency' => $currency,
+        'name' => RAZORPAY_CHECKOUT_NAME,
+        'description' => RAZORPAY_CHECKOUT_DESCRIPTION,
+        'prefill' => [
+            'name' => (string) ($authUser['username'] ?? ''),
+            'email' => (string) ($authUser['email'] ?? ''),
+            'contact' => (string) ($authUser['phone'] ?? '')
+        ]
+    ];
+
+    $gatewayMetadata = $baseMetadata;
+    $gatewayMetadata['razorpay'] = [
+        'request' => $requestPayload,
+        'response' => [
+            'id' => $responseData['id'],
+            'entity' => $responseData['entity'] ?? null,
+            'amount' => $responseData['amount'] ?? null,
+            'currency' => $responseData['currency'] ?? null,
+            'status' => $responseData['status'] ?? null,
+            'receipt' => $responseData['receipt'] ?? null
+        ]
+    ];
+
+    $gatewayUpdateStmt = $pdo->prepare(
+        'UPDATE payment_orders
+         SET gateway_order_id = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?'
+    );
+    $gatewayUpdateStmt->execute([
+        $gatewayOrderId,
+        json_encode($gatewayMetadata, JSON_UNESCAPED_SLASHES),
+        $orderId
+    ]);
+}
 
 json_success([
     'order' => [
@@ -124,8 +248,9 @@ json_success([
         'finalAmount' => round($finalAmount, 2),
         'currency' => $currency,
         'status' => 'created',
-        'gateway' => $gateway !== '' ? $gateway : 'manual'
+        'gateway' => $gateway !== '' ? $gateway : 'manual',
+        'gatewayOrderId' => $gatewayOrderId
     ],
-    'coupon' => $couponData
+    'coupon' => $couponData,
+    'razorpay' => $razorpayPayload
 ], 'Order created', 201);
-

@@ -12,6 +12,9 @@ const emptyQuestion = () => ({
   marks: 1
 });
 
+const parseCsv = (text) => String(text || "").split(",").map((v) => v.trim()).filter(Boolean);
+const normalizeReviewStatus = (status) => (["reviewed", "accepted", "rejected"].includes(status) ? status : "reviewed");
+
 const InstructorQuizChecks = () => {
   const navigate = useNavigate();
   const api = useApi();
@@ -20,22 +23,33 @@ const InstructorQuizChecks = () => {
 
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [selectedModuleId, setSelectedModuleId] = useState("");
+  const [selectedLessonId, setSelectedLessonId] = useState("");
+  const [courseModules, setCourseModules] = useState([]);
   const [quizzes, setQuizzes] = useState([]);
   const [assignments, setAssignments] = useState([]);
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState([]);
+  const [expandedAttemptIds, setExpandedAttemptIds] = useState({});
+
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [savingQuiz, setSavingQuiz] = useState(false);
-  const [savingAssignment, setSavingAssignment] = useState(false);
-  const [expandedAttemptIds, setExpandedAttemptIds] = useState({});
+
+  const [editingQuizId, setEditingQuizId] = useState(null);
+  const [replaceQuizQuestions, setReplaceQuizQuestions] = useState(false);
+  const [editingAssignmentId, setEditingAssignmentId] = useState(null);
+  const [reviewDraftBySubmission, setReviewDraftBySubmission] = useState({});
 
   const [quizForm, setQuizForm] = useState({
     title: "",
     description: "",
     passPercentage: 60,
     timeLimitMinutes: "",
+    isFinalAssessment: false,
     questions: [emptyQuestion()]
   });
+
   const [assignmentForm, setAssignmentForm] = useState({
     title: "",
     description: "",
@@ -48,14 +62,30 @@ const InstructorQuizChecks = () => {
     [courses, selectedCourseId]
   );
 
+  const selectedModule = useMemo(
+    () => courseModules.find((module) => String(module.id) === String(selectedModuleId)) || null,
+    [courseModules, selectedModuleId]
+  );
+
+  const selectedModuleLessons = useMemo(
+    () => (selectedModule?.lessons || []),
+    [selectedModule]
+  );
+
+  const clearFormSelections = () => {
+    setSelectedModuleId("");
+    setSelectedLessonId("");
+  };
+
   const loadCourses = useCallback(async () => {
     if (!user) return;
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    setError("");
     try {
+      const token = localStorage.getItem("token");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
       let list = [];
-      if ((user?.role || "") === "admin") {
-        const response = await api.get("/courses?limit=200&published=all", { headers });
+      if ((user.role || "") === "admin") {
+        const response = await api.get("/courses?limit=300&published=all", { headers });
         list = response?.data?.courses || [];
       } else {
         const response = await api.get(`/courses/instructor/${user._id || user.id}`, { headers });
@@ -66,7 +96,7 @@ const InstructorQuizChecks = () => {
         setSelectedCourseId(String(list[0].id || list[0]._id));
       }
     } catch (err) {
-      setError(err?.response?.data?.message || err?.message || "Failed to load courses.");
+      setError(err?.response?.data?.message || "Failed to load courses.");
     }
   }, [api, user, selectedCourseId]);
 
@@ -76,16 +106,23 @@ const InstructorQuizChecks = () => {
     setError("");
     try {
       const token = localStorage.getItem("token");
-      const [quizRes, assignmentRes] = await Promise.all([
-        api.get(`/courses/${courseId}/quiz-attempts`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetchCourseAssignments(courseId)
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const [quizRes, assignmentRes, assignmentSubRes, contentRes] = await Promise.all([
+        api.get(`/courses/${courseId}/quiz-attempts`, { headers }),
+        fetchCourseAssignments(courseId),
+        api.get(`/courses/${courseId}/assignment-submissions`, { headers }),
+        api.get(`/courses/${courseId}/content`, { headers })
       ]);
       setQuizzes(quizRes?.data?.quizzes || []);
       setAssignments(assignmentRes?.assignments || []);
+      setAssignmentSubmissions(assignmentSubRes?.data?.assignments || []);
+      setCourseModules(contentRes?.data?.modules || []);
     } catch (err) {
+      setError(err?.response?.data?.message || "Failed to load quiz/assignment data.");
       setQuizzes([]);
       setAssignments([]);
-      setError(err?.response?.data?.message || err?.message || "Failed to load course quiz/assignment data.");
+      setAssignmentSubmissions([]);
+      setCourseModules([]);
     } finally {
       setLoading(false);
     }
@@ -97,6 +134,10 @@ const InstructorQuizChecks = () => {
 
   useEffect(() => {
     if (selectedCourseId) {
+      clearFormSelections();
+      setEditingQuizId(null);
+      setEditingAssignmentId(null);
+      setReplaceQuizQuestions(false);
       loadCourseData(selectedCourseId);
     }
   }, [selectedCourseId, loadCourseData]);
@@ -104,6 +145,34 @@ const InstructorQuizChecks = () => {
   const handleLogout = async () => {
     await logout();
     navigate("/login");
+  };
+
+  const setInfo = (nextError = "", nextSuccess = "") => {
+    setError(nextError);
+    setSuccess(nextSuccess);
+  };
+
+  const resetQuizForm = () => {
+    setQuizForm({
+      title: "",
+      description: "",
+      passPercentage: 60,
+      timeLimitMinutes: "",
+      isFinalAssessment: false,
+      questions: [emptyQuestion()]
+    });
+    setEditingQuizId(null);
+    setReplaceQuizQuestions(false);
+  };
+
+  const resetAssignmentForm = () => {
+    setAssignmentForm({
+      title: "",
+      description: "",
+      maxMarks: 100,
+      dueAt: ""
+    });
+    setEditingAssignmentId(null);
   };
 
   const updateQuestion = (index, field, value) => {
@@ -120,72 +189,202 @@ const InstructorQuizChecks = () => {
     questions: prev.questions.length <= 1 ? prev.questions : prev.questions.filter((_, i) => i !== index)
   }));
 
-  const parseCsv = (text) => String(text || "").split(",").map((value) => value.trim()).filter(Boolean);
-
-  const handleCreateQuiz = async (event) => {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
-    if (!selectedCourseId) return setError("Select a course first.");
-    if (!quizForm.title.trim()) return setError("Quiz title is required.");
-
+  const buildQuestionsPayload = () => {
     const questions = [];
     for (let i = 0; i < quizForm.questions.length; i += 1) {
       const q = quizForm.questions[i];
-      if (!q.questionText.trim()) return setError(`Question ${i + 1} text is required.`);
-      const questionType = q.questionType || "single";
-      const options = questionType === "text" ? null : parseCsv(q.optionsText);
-      if (questionType !== "text" && options.length < 2) return setError(`Question ${i + 1} requires 2+ options.`);
-      const correctAnswer = questionType === "multiple" ? parseCsv(q.correctAnswerText) : q.correctAnswerText.trim();
-      if ((questionType === "multiple" && correctAnswer.length === 0) || (questionType !== "multiple" && !correctAnswer)) {
-        return setError(`Question ${i + 1} requires correct answer.`);
+      if (!q.questionText.trim()) return { error: `Question ${i + 1} text is required.` };
+      const type = q.questionType || "single";
+      const options = type === "text" ? null : parseCsv(q.optionsText);
+      if (type !== "text" && options.length < 2) return { error: `Question ${i + 1} needs at least 2 options.` };
+      const correctAnswer = type === "multiple" ? parseCsv(q.correctAnswerText) : q.correctAnswerText.trim();
+      if ((type === "multiple" && correctAnswer.length === 0) || (type !== "multiple" && !correctAnswer)) {
+        return { error: `Question ${i + 1} correct answer is required.` };
       }
       questions.push({
         questionText: q.questionText.trim(),
-        questionType,
+        questionType: type,
         options,
         correctAnswer,
         marks: Number(q.marks || 1),
         sortOrder: i + 1
       });
     }
+    return { questions };
+  };
 
-    setSavingQuiz(true);
-    const result = await createCourseQuiz(selectedCourseId, {
+  const submitQuiz = async (event) => {
+    event.preventDefault();
+    if (!selectedCourseId) return setInfo("Select a course.", "");
+    if (!quizForm.title.trim()) return setInfo("Quiz title is required.", "");
+    setSaving(true);
+    setInfo("", "");
+
+    const payload = {
       title: quizForm.title.trim(),
       description: quizForm.description.trim(),
       passPercentage: Number(quizForm.passPercentage || 60),
       timeLimitMinutes: quizForm.timeLimitMinutes ? Number(quizForm.timeLimitMinutes) : null,
-      questions
-    });
-    setSavingQuiz(false);
-    if (!result.success) return setError(result.error || "Failed to create quiz.");
+      moduleId: quizForm.isFinalAssessment ? null : (selectedModuleId ? Number(selectedModuleId) : null),
+      lessonId: quizForm.isFinalAssessment ? null : (selectedLessonId ? Number(selectedLessonId) : null),
+      isFinalAssessment: !!quizForm.isFinalAssessment
+    };
 
-    setSuccess("Quiz created.");
-    setQuizForm({ title: "", description: "", passPercentage: 60, timeLimitMinutes: "", questions: [emptyQuestion()] });
-    await loadCourseData(selectedCourseId);
+    if (!editingQuizId || replaceQuizQuestions) {
+      const parsed = buildQuestionsPayload();
+      if (parsed.error) {
+        setSaving(false);
+        return setInfo(parsed.error, "");
+      }
+      payload.questions = parsed.questions;
+    }
+
+    try {
+      if (editingQuizId) {
+        const token = localStorage.getItem("token");
+        await api.put(`/quizzes/${editingQuizId}`, payload, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        setInfo("", "Quiz updated.");
+      } else {
+        const result = await createCourseQuiz(selectedCourseId, payload);
+        if (!result.success) throw new Error(result.error || "Failed to create quiz.");
+        setInfo("", "Quiz created.");
+      }
+      resetQuizForm();
+      await loadCourseData(selectedCourseId);
+    } catch (err) {
+      setInfo(err?.response?.data?.message || err?.message || "Failed to save quiz.", "");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleCreateAssignment = async (event) => {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
-    if (!selectedCourseId) return setError("Select a course first.");
-    if (!assignmentForm.title.trim()) return setError("Assignment title is required.");
-
-    setSavingAssignment(true);
-    const result = await createCourseAssignment(selectedCourseId, {
-      title: assignmentForm.title.trim(),
-      description: assignmentForm.description.trim(),
-      maxMarks: Number(assignmentForm.maxMarks || 100),
-      dueAt: assignmentForm.dueAt || null
+  const startQuizEdit = (quiz) => {
+    setEditingQuizId(quiz.id || quiz._id);
+    setQuizForm({
+      title: quiz.title || "",
+      description: quiz.description || "",
+      passPercentage: Number(quiz.passPercentage || 60),
+      timeLimitMinutes: quiz.timeLimitMinutes || "",
+      isFinalAssessment: !!quiz.isFinalAssessment,
+      questions: [emptyQuestion()]
     });
-    setSavingAssignment(false);
-    if (!result.success) return setError(result.error || "Failed to create assignment.");
+    setReplaceQuizQuestions(false);
+    setSelectedModuleId(quiz.moduleId ? String(quiz.moduleId) : "");
+    setSelectedLessonId(quiz.lessonId ? String(quiz.lessonId) : "");
+  };
 
-    setSuccess("Assignment created.");
-    setAssignmentForm({ title: "", description: "", maxMarks: 100, dueAt: "" });
-    await loadCourseData(selectedCourseId);
+  const deleteQuiz = async (quizId) => {
+    if (!window.confirm("Delete this quiz?")) return;
+    setSaving(true);
+    setInfo("", "");
+    try {
+      const token = localStorage.getItem("token");
+      await api.delete(`/quizzes/${quizId}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      setInfo("", "Quiz deleted.");
+      await loadCourseData(selectedCourseId);
+    } catch (err) {
+      setInfo(err?.response?.data?.message || "Failed to delete quiz.", "");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitAssignment = async (event) => {
+    event.preventDefault();
+    if (!selectedCourseId) return setInfo("Select a course.", "");
+    if (!assignmentForm.title.trim()) return setInfo("Assignment title is required.", "");
+    setSaving(true);
+    setInfo("", "");
+    try {
+      if (editingAssignmentId) {
+        const token = localStorage.getItem("token");
+        await api.put(`/assignments/${editingAssignmentId}`, {
+          title: assignmentForm.title.trim(),
+          description: assignmentForm.description.trim(),
+          maxMarks: Number(assignmentForm.maxMarks || 100),
+          dueAt: assignmentForm.dueAt || null,
+          moduleId: selectedModuleId ? Number(selectedModuleId) : null,
+          lessonId: selectedLessonId ? Number(selectedLessonId) : null
+        }, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        setInfo("", "Assignment updated.");
+      } else {
+        const result = await createCourseAssignment(selectedCourseId, {
+          title: assignmentForm.title.trim(),
+          description: assignmentForm.description.trim(),
+          maxMarks: Number(assignmentForm.maxMarks || 100),
+          dueAt: assignmentForm.dueAt || null,
+          moduleId: selectedModuleId ? Number(selectedModuleId) : null,
+          lessonId: selectedLessonId ? Number(selectedLessonId) : null
+        });
+        if (!result.success) throw new Error(result.error || "Failed to create assignment.");
+        setInfo("", "Assignment created.");
+      }
+      resetAssignmentForm();
+      await loadCourseData(selectedCourseId);
+    } catch (err) {
+      setInfo(err?.response?.data?.message || err?.message || "Failed to save assignment.", "");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startAssignmentEdit = (assignment) => {
+    setEditingAssignmentId(assignment.id || assignment._id);
+    setAssignmentForm({
+      title: assignment.title || "",
+      description: assignment.description || "",
+      maxMarks: Number(assignment.maxMarks || 100),
+      dueAt: assignment.dueAt ? String(assignment.dueAt).slice(0, 16) : ""
+    });
+    setSelectedModuleId(assignment.moduleId ? String(assignment.moduleId) : "");
+    setSelectedLessonId(assignment.lessonId ? String(assignment.lessonId) : "");
+  };
+
+  const deleteAssignment = async (assignmentId) => {
+    if (!window.confirm("Delete this assignment?")) return;
+    setSaving(true);
+    setInfo("", "");
+    try {
+      const token = localStorage.getItem("token");
+      await api.delete(`/assignments/${assignmentId}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      setInfo("", "Assignment deleted.");
+      await loadCourseData(selectedCourseId);
+    } catch (err) {
+      setInfo(err?.response?.data?.message || "Failed to delete assignment.", "");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openReviewDraft = (submission) => {
+    setReviewDraftBySubmission((prev) => ({
+      ...prev,
+      [submission.id]: {
+        status: normalizeReviewStatus(submission.status),
+        marks: submission.marks ?? "",
+        feedback: submission.feedback || ""
+      }
+    }));
+  };
+
+  const saveSubmissionReview = async (submission) => {
+    const draft = reviewDraftBySubmission[submission.id] || {};
+    setSaving(true);
+    setInfo("", "");
+    try {
+      const token = localStorage.getItem("token");
+      await api.put(`/assignment-submissions/${submission.id}/review`, {
+        status: draft.status || "reviewed",
+        marks: draft.marks === "" ? null : Number(draft.marks),
+        feedback: draft.feedback || ""
+      }, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      setInfo("", "Submission reviewed.");
+      await loadCourseData(selectedCourseId);
+    } catch (err) {
+      setInfo(err?.response?.data?.message || "Failed to review submission.", "");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleAttemptDetails = (attemptId) => setExpandedAttemptIds((prev) => ({ ...prev, [attemptId]: !prev[attemptId] }));
@@ -203,118 +402,165 @@ const InstructorQuizChecks = () => {
         </ul>
       </nav>
 
-      <div className="flex flex-col flex-1">
-        <header className="flex items-center justify-center px-10 py-5 border-b bg-stone-950 border-b-fuchsia-900"><h1 className="text-3xl font-bold">Code<span className="text-fuchsia-500">Hub</span></h1></header>
-        <main className="flex-1 p-7 max-sm:p-4">
-          <h2 className="text-4xl mb-6">Quiz & Assignment Manager</h2>
+      <div className="flex-1 p-6">
+        <h2 className="text-3xl">Assessment Manager</h2>
+        <div className="flex flex-wrap gap-2 mt-4">
+          <select className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={selectedCourseId} onChange={(e) => setSelectedCourseId(e.target.value)}>
+            {courses.map((course) => <option key={course.id || course._id} value={String(course.id || course._id)}>{course.name}</option>)}
+          </select>
+          <select className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={selectedModuleId} onChange={(e) => { setSelectedModuleId(e.target.value); setSelectedLessonId(""); }}>
+            <option value="">No module</option>
+            {courseModules.map((module) => <option key={module.id} value={String(module.id)}>{module.title}</option>)}
+          </select>
+          <select className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={selectedLessonId} onChange={(e) => setSelectedLessonId(e.target.value)}>
+            <option value="">No lesson</option>
+            {selectedModuleLessons.map((lesson) => <option key={lesson.id} value={String(lesson.id)}>{lesson.title}</option>)}
+          </select>
+        </div>
+        {error ? <p className="mt-3 text-red-400">{error}</p> : null}
+        {success ? <p className="mt-3 text-green-400">{success}</p> : null}
 
-          <div className="flex flex-wrap items-center gap-4 p-4 border rounded-lg border-fuchsia-700 bg-stone-950">
-            <label htmlFor="course-select" className="text-lg">Select Course:</label>
-            <select id="course-select" className="px-4 py-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={selectedCourseId} onChange={(event) => setSelectedCourseId(event.target.value)}>
-              {courses.map((course) => <option key={course.id || course._id} value={String(course.id || course._id)}>{course.name}</option>)}
-            </select>
-            <span className="text-sm text-gray-300">Quizzes: {quizzes.length}</span>
-            <span className="text-sm text-gray-300">Assignments: {assignments.length}</span>
-          </div>
+        <div className="grid gap-4 mt-4 lg:grid-cols-2">
+          <form onSubmit={submitQuiz} className="p-4 border rounded border-fuchsia-700 bg-stone-950">
+            <h3 className="text-xl">{editingQuizId ? "Edit Quiz" : "Create Quiz"}</h3>
+            <input className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Title" value={quizForm.title} onChange={(e) => setQuizForm((p) => ({ ...p, title: e.target.value }))} />
+            <textarea className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Description" value={quizForm.description} onChange={(e) => setQuizForm((p) => ({ ...p, description: e.target.value }))} />
+            <div className="grid gap-2 mt-2 sm:grid-cols-2">
+              <input type="number" min="0" max="100" className="p-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Pass %" value={quizForm.passPercentage} onChange={(e) => setQuizForm((p) => ({ ...p, passPercentage: e.target.value }))} />
+              <input type="number" min="1" className="p-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Time limit minutes" value={quizForm.timeLimitMinutes} onChange={(e) => setQuizForm((p) => ({ ...p, timeLimitMinutes: e.target.value }))} />
+            </div>
+            <label className="flex items-center gap-2 mt-2 text-sm"><input type="checkbox" checked={!!quizForm.isFinalAssessment} onChange={(e) => setQuizForm((p) => ({ ...p, isFinalAssessment: e.target.checked }))} /> Final Assessment</label>
+            {editingQuizId ? <label className="flex items-center gap-2 mt-2 text-sm"><input type="checkbox" checked={replaceQuizQuestions} onChange={(e) => setReplaceQuizQuestions(e.target.checked)} /> Replace all questions</label> : null}
 
-          {error && <p className="mt-4 text-red-400">{error}</p>}
-          {success && <p className="mt-4 text-green-400">{success}</p>}
-
-          <div className="grid gap-6 mt-6 lg:grid-cols-2">
-            <form onSubmit={handleCreateQuiz} className="p-4 border rounded-lg border-fuchsia-700 bg-stone-950">
-              <h3 className="text-2xl">Create Quiz</h3>
-              <input className="w-full p-2 mt-3 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Quiz title" value={quizForm.title} onChange={(event) => setQuizForm((prev) => ({ ...prev, title: event.target.value }))} />
-              <textarea className="w-full p-2 mt-3 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Description" value={quizForm.description} onChange={(event) => setQuizForm((prev) => ({ ...prev, description: event.target.value }))} />
-              <div className="grid gap-3 mt-3 sm:grid-cols-2">
-                <input type="number" min="0" max="100" className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Pass %" value={quizForm.passPercentage} onChange={(event) => setQuizForm((prev) => ({ ...prev, passPercentage: event.target.value }))} />
-                <input type="number" min="1" className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Time limit minutes" value={quizForm.timeLimitMinutes} onChange={(event) => setQuizForm((prev) => ({ ...prev, timeLimitMinutes: event.target.value }))} />
-              </div>
-              <div className="mt-4 space-y-3">
-                {quizForm.questions.map((q, index) => (
-                  <div key={`q-${index}`} className="p-3 border rounded border-stone-700 bg-black">
-                    <div className="flex justify-between"><p>Question {index + 1}</p>{quizForm.questions.length > 1 && <button type="button" className="text-red-400" onClick={() => removeQuestion(index)}>Remove</button>}</div>
-                    <input className="w-full p-2 mt-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Question text" value={q.questionText} onChange={(event) => updateQuestion(index, "questionText", event.target.value)} />
-                    <select className="w-full p-2 mt-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={q.questionType} onChange={(event) => updateQuestion(index, "questionType", event.target.value)}>
+            {(!editingQuizId || replaceQuizQuestions) ? (
+              <div className="mt-2 space-y-2">
+                {quizForm.questions.map((q, idx) => (
+                  <div key={`q-${idx}`} className="p-2 border rounded border-stone-700 bg-black">
+                    <input className="w-full p-2 border rounded bg-stone-900 border-fuchsia-700" placeholder={`Question ${idx + 1}`} value={q.questionText} onChange={(e) => updateQuestion(idx, "questionText", e.target.value)} />
+                    <select className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" value={q.questionType} onChange={(e) => updateQuestion(idx, "questionType", e.target.value)}>
                       <option value="single">Single</option><option value="multiple">Multiple</option><option value="text">Text</option>
                     </select>
-                    {q.questionType !== "text" && <input className="w-full p-2 mt-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Options: A, B, C" value={q.optionsText} onChange={(event) => updateQuestion(index, "optionsText", event.target.value)} />}
-                    <input className="w-full p-2 mt-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder={q.questionType === "multiple" ? "Correct answers: A, C" : "Correct answer"} value={q.correctAnswerText} onChange={(event) => updateQuestion(index, "correctAnswerText", event.target.value)} />
-                    <input type="number" min="1" className="w-full p-2 mt-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Marks" value={q.marks} onChange={(event) => updateQuestion(index, "marks", event.target.value)} />
+                    {q.questionType !== "text" ? <input className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Options: A, B, C" value={q.optionsText} onChange={(e) => updateQuestion(idx, "optionsText", e.target.value)} /> : null}
+                    <input className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder={q.questionType === "multiple" ? "Correct: A, C" : "Correct: A"} value={q.correctAnswerText} onChange={(e) => updateQuestion(idx, "correctAnswerText", e.target.value)} />
+                    <div className="flex gap-2 mt-2">
+                      <input type="number" min="1" className="w-full p-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Marks" value={q.marks} onChange={(e) => updateQuestion(idx, "marks", e.target.value)} />
+                      {quizForm.questions.length > 1 ? <button type="button" className="px-3 py-2 text-sm bg-red-700 rounded hover:bg-red-600" onClick={() => removeQuestion(idx)}>Remove</button> : null}
+                    </div>
                   </div>
                 ))}
+                <button type="button" className="px-3 py-2 text-sm rounded bg-stone-800 hover:bg-stone-700" onClick={addQuestion}>Add Question</button>
               </div>
-              <div className="flex gap-3 mt-3">
-                <button type="button" className="px-3 py-2 rounded bg-stone-800" onClick={addQuestion}>Add Question</button>
-                <button type="submit" className="px-3 py-2 rounded bg-fuchsia-700 disabled:opacity-60" disabled={savingQuiz}>{savingQuiz ? "Creating..." : "Create Quiz"}</button>
-              </div>
-            </form>
+            ) : <p className="mt-2 text-xs text-yellow-300">Question data is preserved unless you enable "Replace all questions".</p>}
 
-            <div className="space-y-6">
-              <form onSubmit={handleCreateAssignment} className="p-4 border rounded-lg border-fuchsia-700 bg-stone-950">
-                <h3 className="text-2xl">Create Assignment</h3>
-                <input className="w-full p-2 mt-3 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Assignment title" value={assignmentForm.title} onChange={(event) => setAssignmentForm((prev) => ({ ...prev, title: event.target.value }))} />
-                <textarea className="w-full p-2 mt-3 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Description" value={assignmentForm.description} onChange={(event) => setAssignmentForm((prev) => ({ ...prev, description: event.target.value }))} />
-                <div className="grid gap-3 mt-3 sm:grid-cols-2">
-                  <input type="number" min="1" className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" placeholder="Max Marks" value={assignmentForm.maxMarks} onChange={(event) => setAssignmentForm((prev) => ({ ...prev, maxMarks: event.target.value }))} />
-                  <input type="datetime-local" className="p-2 text-white border rounded bg-stone-900 border-fuchsia-700" value={assignmentForm.dueAt} onChange={(event) => setAssignmentForm((prev) => ({ ...prev, dueAt: event.target.value }))} />
-                </div>
-                <button type="submit" className="px-3 py-2 mt-3 rounded bg-fuchsia-700 disabled:opacity-60" disabled={savingAssignment}>{savingAssignment ? "Creating..." : "Create Assignment"}</button>
-              </form>
-
-              <div className="p-4 border rounded-lg border-fuchsia-700 bg-stone-950">
-                <h3 className="text-2xl">Current Assignments</h3>
-                {assignments.length === 0 ? <p className="mt-3 text-gray-400">No assignments created.</p> : assignments.map((item) => (
-                  <div key={item.id || item._id} className="p-2 mt-2 border rounded border-stone-700 bg-black">
-                    <p>{item.title}</p>
-                    <p className="text-sm text-gray-300">Max: {item.maxMarks}</p>
-                  </div>
-                ))}
-              </div>
+            <div className="flex gap-2 mt-3">
+              <button type="submit" className="px-3 py-2 rounded bg-fuchsia-700 hover:bg-fuchsia-600 disabled:opacity-60" disabled={saving}>{editingQuizId ? "Save Quiz" : "Create Quiz"}</button>
+              {editingQuizId ? <button type="button" className="px-3 py-2 rounded bg-stone-700 hover:bg-stone-600" onClick={resetQuizForm}>Cancel</button> : null}
             </div>
-          </div>
+          </form>
 
-          {loading ? <p className="mt-6">Loading quiz attempts...</p> : quizzes.map((quiz) => (
-            <section key={quiz.id || quiz._id} className="p-4 mt-6 border rounded-lg border-fuchsia-700 bg-stone-950">
-              <div className="flex justify-between">
-                <div><h3 className="text-xl">{quiz.title}</h3><p className="text-sm text-gray-300">{quiz.description}</p></div>
-                <div className="text-sm text-right text-gray-300"><p>Attempts: {quiz.stats?.attemptCount || 0}</p><p>Pass Rate: {Number(quiz.stats?.passRate || 0).toFixed(2)}%</p></div>
-              </div>
-              {(quiz.attempts || []).length === 0 ? <p className="mt-3 text-gray-400">No attempts yet.</p> : (
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[800px] border border-fuchsia-900">
-                    <thead className="bg-fuchsia-900/20"><tr><th className="p-2 text-left border border-fuchsia-900">Student</th><th className="p-2 text-left border border-fuchsia-900">Score</th><th className="p-2 text-left border border-fuchsia-900">Result</th><th className="p-2 text-left border border-fuchsia-900">Action</th></tr></thead>
-                    <tbody>
-                      {(quiz.attempts || []).map((attempt) => {
-                        const attemptId = String(attempt.id || attempt._id);
-                        const expanded = !!expandedAttemptIds[attemptId];
-                        const isPassed = Number(attempt.percentage || 0) >= Number(quiz.passPercentage || 0);
-                        return (
-                          <React.Fragment key={attemptId}>
-                            <tr className="hover:bg-stone-900">
-                              <td className="p-2 border border-fuchsia-900">{attempt.user?.username || "Student"}</td>
-                              <td className="p-2 border border-fuchsia-900">{Number(attempt.score || 0).toFixed(2)} / {Number(attempt.totalMarks || 0).toFixed(2)}</td>
-                              <td className="p-2 border border-fuchsia-900"><span className={isPassed ? "text-green-400" : "text-red-400"}>{isPassed ? "Pass" : "Fail"}</span></td>
-                              <td className="p-2 border border-fuchsia-900"><button className="px-2 py-1 text-sm rounded bg-fuchsia-700" onClick={() => toggleAttemptDetails(attemptId)}>{expanded ? "Hide" : "View"} Answers</button></td>
-                            </tr>
-                            {expanded && <tr><td colSpan={4} className="p-3 border border-fuchsia-900 bg-black">{(attempt.breakdown || []).map((item) => <div key={`${attemptId}-${item.questionId}`} className="p-2 mt-2 border rounded border-stone-700 bg-stone-950"><p>{item.questionText}</p><p className="text-sm text-gray-300">Student: {formatAnswer(item.providedAnswer)} | Correct: {formatAnswer(item.correctAnswer)}</p></div>)}</td></tr>}
-                          </React.Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+          <form onSubmit={submitAssignment} className="p-4 border rounded border-fuchsia-700 bg-stone-950">
+            <h3 className="text-xl">{editingAssignmentId ? "Edit Assignment" : "Create Assignment"}</h3>
+            <input className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Title" value={assignmentForm.title} onChange={(e) => setAssignmentForm((p) => ({ ...p, title: e.target.value }))} />
+            <textarea className="w-full p-2 mt-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Description" value={assignmentForm.description} onChange={(e) => setAssignmentForm((p) => ({ ...p, description: e.target.value }))} />
+            <div className="grid gap-2 mt-2 sm:grid-cols-2">
+              <input type="number" min="1" className="p-2 border rounded bg-stone-900 border-fuchsia-700" placeholder="Max marks" value={assignmentForm.maxMarks} onChange={(e) => setAssignmentForm((p) => ({ ...p, maxMarks: e.target.value }))} />
+              <input type="datetime-local" className="p-2 border rounded bg-stone-900 border-fuchsia-700" value={assignmentForm.dueAt} onChange={(e) => setAssignmentForm((p) => ({ ...p, dueAt: e.target.value }))} />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button type="submit" className="px-3 py-2 rounded bg-fuchsia-700 hover:bg-fuchsia-600 disabled:opacity-60" disabled={saving}>{editingAssignmentId ? "Save Assignment" : "Create Assignment"}</button>
+              {editingAssignmentId ? <button type="button" className="px-3 py-2 rounded bg-stone-700 hover:bg-stone-600" onClick={resetAssignmentForm}>Cancel</button> : null}
+            </div>
+          </form>
+        </div>
+
+        <div className="grid gap-4 mt-6 lg:grid-cols-2">
+          <section className="p-4 border rounded border-fuchsia-700 bg-stone-950">
+            <h3 className="text-xl">Quizzes ({quizzes.length})</h3>
+            {loading ? <p className="mt-2 text-gray-400">Loading...</p> : quizzes.map((quiz) => (
+              <div key={quiz.id || quiz._id} className="p-2 mt-2 border rounded border-stone-700 bg-black">
+                <div className="flex items-center justify-between gap-2">
+                  <div><p>{quiz.title}</p><p className="text-xs text-gray-400">Attempts: {quiz.stats?.attemptCount || 0} | Pass: {Number(quiz.passPercentage || 0)}%</p></div>
+                  <div className="flex gap-2">
+                    <button className="px-2 py-1 text-xs rounded bg-stone-700 hover:bg-stone-600" onClick={() => startQuizEdit(quiz)}>Edit</button>
+                    <button className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600" onClick={() => deleteQuiz(quiz.id || quiz._id)}>Delete</button>
+                  </div>
                 </div>
-              )}
-            </section>
+                {(quiz.attempts || []).map((attempt) => {
+                  const attemptId = String(attempt.id || attempt._id);
+                  const expanded = !!expandedAttemptIds[attemptId];
+                  return (
+                    <div key={attemptId} className="p-2 mt-2 border rounded border-stone-700">
+                      <div className="flex items-center justify-between gap-2 text-sm">
+                        <span>{attempt.user?.username || "Student"} | {Number(attempt.score || 0)} / {Number(attempt.totalMarks || 0)}</span>
+                        <button className="px-2 py-1 text-xs rounded bg-fuchsia-700 hover:bg-fuchsia-600" onClick={() => toggleAttemptDetails(attemptId)}>{expanded ? "Hide" : "View"} Answers</button>
+                      </div>
+                      {expanded ? (
+                        <div className="mt-2 space-y-2">
+                          {(attempt.breakdown || []).map((item) => (
+                            <div key={`${attemptId}-${item.questionId}`} className="p-2 text-xs border rounded border-stone-700 bg-stone-950">
+                              <p>{item.questionText}</p>
+                              <p className="text-gray-400">Student: {formatAnswer(item.providedAnswer)} | Correct: {formatAnswer(item.correctAnswer)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </section>
+
+          <section className="p-4 border rounded border-fuchsia-700 bg-stone-950">
+            <h3 className="text-xl">Assignments ({assignments.length})</h3>
+            {loading ? <p className="mt-2 text-gray-400">Loading...</p> : assignments.map((assignment) => (
+              <div key={assignment.id || assignment._id} className="p-2 mt-2 border rounded border-stone-700 bg-black">
+                <div className="flex items-center justify-between gap-2">
+                  <div><p>{assignment.title}</p><p className="text-xs text-gray-400">Max: {assignment.maxMarks} | Due: {assignment.dueAt ? String(assignment.dueAt) : "N/A"}</p></div>
+                  <div className="flex gap-2">
+                    <button className="px-2 py-1 text-xs rounded bg-stone-700 hover:bg-stone-600" onClick={() => startAssignmentEdit(assignment)}>Edit</button>
+                    <button className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600" onClick={() => deleteAssignment(assignment.id || assignment._id)}>Delete</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </section>
+        </div>
+
+        <section className="p-4 mt-6 border rounded border-fuchsia-700 bg-stone-950">
+          <h3 className="text-xl">Submission Reviews</h3>
+          {assignmentSubmissions.length === 0 ? <p className="mt-2 text-gray-400">No assignment submissions yet.</p> : assignmentSubmissions.map((assignment) => (
+            <div key={assignment.id || assignment._id} className="p-3 mt-3 border rounded border-stone-700 bg-black">
+              <p className="font-medium">{assignment.title}</p>
+              {(assignment.submissions || []).length === 0 ? <p className="mt-1 text-xs text-gray-400">No submissions yet.</p> : assignment.submissions.map((submission) => {
+                const draft = reviewDraftBySubmission[submission.id] || { status: normalizeReviewStatus(submission.status), marks: submission.marks ?? "", feedback: submission.feedback || "" };
+                return (
+                  <div key={submission.id} className="p-2 mt-2 border rounded border-stone-700 bg-stone-950">
+                    <p className="text-sm">{submission.user?.username} ({submission.user?.email})</p>
+                    <p className="mt-1 text-xs text-gray-400">Submitted: {submission.submittedAt || "-"}</p>
+                    <div className="grid gap-2 mt-2 md:grid-cols-3">
+                      <select className="p-2 text-xs border rounded bg-black border-stone-700" value={draft.status} onChange={(e) => setReviewDraftBySubmission((prev) => ({ ...prev, [submission.id]: { ...draft, status: e.target.value } }))}>
+                        <option value="reviewed">reviewed</option><option value="accepted">accepted</option><option value="rejected">rejected</option>
+                      </select>
+                      <input type="number" min="0" className="p-2 text-xs border rounded bg-black border-stone-700" placeholder="Marks" value={draft.marks} onChange={(e) => setReviewDraftBySubmission((prev) => ({ ...prev, [submission.id]: { ...draft, marks: e.target.value } }))} />
+                      <button className="px-3 py-2 text-xs rounded bg-fuchsia-700 hover:bg-fuchsia-600 disabled:opacity-60" disabled={saving} onClick={() => saveSubmissionReview(submission)}>Save Review</button>
+                    </div>
+                    <textarea className="w-full h-16 p-2 mt-2 text-xs border rounded resize-none bg-black border-stone-700" placeholder="Feedback" value={draft.feedback} onChange={(e) => setReviewDraftBySubmission((prev) => ({ ...prev, [submission.id]: { ...draft, feedback: e.target.value } }))} />
+                    {!reviewDraftBySubmission[submission.id] ? <button className="px-2 py-1 mt-2 text-xs rounded bg-stone-700 hover:bg-stone-600" onClick={() => openReviewDraft(submission)}>Load Draft</button> : null}
+                  </div>
+                );
+              })}
+            </div>
           ))}
+        </section>
 
-          {selectedCourse && (
-            <div className="mt-6">
-              <button className="px-4 py-2 text-white rounded bg-stone-800 hover:bg-stone-700" onClick={() => navigate(`/courses/${selectedCourse.slug || selectedCourse.id || selectedCourse._id}/quizzes`)}>
-                Open Student Quiz Page
-              </button>
-            </div>
-          )}
-        </main>
+        {selectedCourse ? (
+          <div className="mt-6">
+            <button className="px-4 py-2 text-white rounded bg-stone-800 hover:bg-stone-700" onClick={() => navigate(`/courses/${selectedCourse.slug || selectedCourse.id || selectedCourse._id}/quizzes`)}>
+              Open Student Quiz Page
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
